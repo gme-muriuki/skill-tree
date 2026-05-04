@@ -1,0 +1,18 @@
+[book]
+authors = ["Niko Matsakis", "James Muriuki"]
+language = "en"
+src = "md"
+title = "skill-tree"
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output]
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+additional-css = ["theme/custom.css"]
+fold.enable = true
+fold.level = 0
+git-repository-url = "https://github.com/nikomatsakis/skill-tree"
+edit-url-template = "https://github.com/nikomatsakis/skill-tree/edit/main/md/{path}"

@@ -1,0 +1,1 @@
+<!-- The fetch → model → render pipeline, crate boundaries, and the strict one-way data flow that holds the architecture together. -->
