@@ -3,7 +3,7 @@
 //! Two types carry configuration through the application:
 //!
 //! - [`Config`] -- the raw parsed TOML. Just data.
-//! - [`FieldConfig`] -- the application context. Wraps `Config` with
+//! - [`SkillTree`] -- the application context. Wraps `Config` with
 //!   resolved paths and provides the methods the rest of the pipeline calls.
 //!
 //! ## Field auto-discovery.
@@ -85,7 +85,7 @@ pub struct SkillTree {
 
 impl SkillTree {
     /// The default filename skill-tree looks for.
-    pub const CONFIG_FILENAME: &'static str = ".skill_tree.toml";
+    pub const CONFIG_FILENAME: &'static str = ".skill-tree.toml";
 
     /// Load config from `.skill-tree.toml` in `dir`.
     ///
@@ -109,7 +109,7 @@ impl SkillTree {
             source,
         })?;
 
-        config.validate(path)?;
+        config.validate()?;
 
         let config_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
@@ -146,7 +146,7 @@ impl SkillTree {
 }
 
 impl Config {
-    fn validate(&self, _path: &Path) -> Fallible<()> {
+    fn validate(&self) -> Fallible<()> {
         for (key, value) in &self.colors.values {
             if !is_valid_hex_color(value) {
                 return Err(ConfigError::InvalidColor {
@@ -171,41 +171,41 @@ fn is_valid_hex_color(color: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
- 
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use indoc::indoc;
     use tempfile::tempdir;
- 
+
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("test TOML should be valid")
     }
- 
+
     fn valid_toml() -> &'static str {
         indoc! {"
             [github]
             owner   = \"rust-lang\"
             project = 42
- 
+
             [[field]]
             display-name = \"status\"
             github-name = \"Status\"
- 
+
             [[field]]
             display-name = \"priority\"
             github-name = \"Priority\"
- 
+
             [colors]
             github-name = \"Status\"
- 
+
             [colors.values]
             \"In Progress\" = \"#4a90d9\"
             \"Blocked\" = \"#e05252\"
             \"Complete\" = \"#57a85a\"
         "}
     }
- 
+
     fn minimal_toml() -> &'static str {
         indoc! {"
             [github]
@@ -213,14 +213,14 @@ mod tests {
             project = 1
         "}
     }
- 
+
     #[test]
     fn parses_github_section() {
         let config = parse(valid_toml());
         assert_eq!(config.github.owner, "rust-lang");
         assert_eq!(config.github.project, 42);
     }
- 
+
     #[test]
     fn parses_multiple_fields() {
         let config = parse(valid_toml());
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(config.fields[1].display_name, "priority");
         assert_eq!(config.fields[1].github_name, "Priority");
     }
- 
+
     #[test]
     fn parses_colors_section() {
         let config = parse(valid_toml());
@@ -240,17 +240,17 @@ mod tests {
             Some("#4a90d9")
         );
     }
- 
+
     #[test]
     fn minimal_config_is_valid() {
         // No [[field]] and no [colors] -- both are optional after
         // introducing field auto-discovery.
         let config = parse(minimal_toml());
-        assert!(config.validate(Path::new(".skill_tree.toml")).is_ok());
+        assert!(config.validate().is_ok());
         assert!(config.fields.is_empty());
         assert!(config.colors.github_name.is_empty());
     }
- 
+
     #[test]
     fn config_without_fields_is_valid() {
         // [[field]] is optional -- skill-tree fetches all fields regardless.
@@ -258,52 +258,52 @@ mod tests {
             [github]
             owner   = \"rust-lang\"
             project = 42
- 
+
             [colors]
             github-name = \"Status\"
         "});
-        assert!(config.validate(Path::new(".skill_tree.toml")).is_ok());
+        assert!(config.validate().is_ok());
     }
- 
+
     #[test]
     fn validation_passes_on_valid_config() {
         let config = parse(valid_toml());
-        assert!(config.validate(Path::new(".skill_tree.toml")).is_ok());
+        assert!(config.validate().is_ok());
     }
- 
+
     #[test]
     fn validation_fails_on_invalid_hex_color() {
         let config = parse(indoc! {"
             [github]
             owner   = \"rust-lang\"
             project = 42
- 
+
             [[field]]
             display-name = \"status\"
             github-name  = \"Status\"
- 
+
             [colors]
             github-name = \"Status\"
- 
+
             [colors.values]
             \"In Progress\" = \"blue\"
         "});
         assert!(matches!(
-            config.validate(Path::new(".skill_tree.toml")),
+            config.validate(),
             Err(ConfigError::InvalidColor { .. })
         ));
     }
- 
+
     #[test]
     fn from_dir_loads_config_file() {
         let tmp = tempdir().unwrap();
-        fs::write(tmp.path().join(".skill_tree.toml"), valid_toml()).unwrap();
- 
+        fs::write(tmp.path().join(".skill-tree.toml"), valid_toml()).unwrap();
+
         let st = SkillTree::from_dir(tmp.path()).unwrap();
         assert_eq!(st.config.github.owner, "rust-lang");
         assert_eq!(st.config_dir(), tmp.path());
     }
- 
+
     #[test]
     fn from_dir_fails_when_file_missing() {
         let tmp = tempdir().unwrap();
@@ -312,55 +312,55 @@ mod tests {
             Err(ConfigError::Io { .. })
         ));
     }
- 
+
     #[test]
     fn color_for_value_returns_hex() {
         let tmp = tempdir().unwrap();
-        fs::write(tmp.path().join(".skill_tree.toml"), valid_toml()).unwrap();
+        fs::write(tmp.path().join(".skill-tree.toml"), valid_toml()).unwrap();
         let st = SkillTree::from_dir(tmp.path()).unwrap();
- 
+
         assert_eq!(st.color_for_value("In Progress"), Some("#4a90d9"));
         assert_eq!(st.color_for_value("Unknown"), None);
     }
- 
+
     #[test]
     fn color_for_value_returns_none_when_colors_not_configured() {
         let tmp = tempdir().unwrap();
-        fs::write(tmp.path().join(".skill_tree.toml"), minimal_toml()).unwrap();
+        fs::write(tmp.path().join(".skill-tree.toml"), minimal_toml()).unwrap();
         let st = SkillTree::from_dir(tmp.path()).unwrap();
- 
+
         assert_eq!(st.color_for_value("In Progress"), None);
     }
- 
+
     #[test]
     fn field_by_display_name_finds_declared_field() {
         let tmp = tempdir().unwrap();
-        fs::write(tmp.path().join(".skill_tree.toml"), valid_toml()).unwrap();
+        fs::write(tmp.path().join(".skill-tree.toml"), valid_toml()).unwrap();
         let st = SkillTree::from_dir(tmp.path()).unwrap();
- 
+
         let field = st.field_by_display_name("status").unwrap();
         assert_eq!(field.github_name, "Status");
         assert!(st.field_by_display_name("nonexistent").is_none());
     }
- 
+
     #[test]
     fn deny_unknown_fields_on_field_config() {
         let result: Result<Config, _> = toml::from_str(indoc! {"
             [github]
             owner   = \"rust-lang\"
             project = 42
- 
+
             [[field]]
             display-name = \"status\"
             github-name  = \"Status\"
             unknown-key  = \"oops\"
- 
+
             [colors]
             github-name = \"Status\"
         "});
         assert!(result.is_err());
     }
- 
+
     #[test]
     fn hex_color_validation() {
         assert!(is_valid_hex_color("#4a90d9"));
@@ -374,4 +374,3 @@ mod tests {
         assert!(!is_valid_hex_color("#"));
     }
 }
- 

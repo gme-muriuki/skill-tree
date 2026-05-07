@@ -1,1 +1,0 @@
-<!-- How edges are represented: GitHub's native blocking relationship only. Why we do not parse issue body text. The design node pattern. -->
