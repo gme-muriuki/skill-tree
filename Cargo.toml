@@ -8,3 +8,9 @@ license = "MIT"
 repository = "https://github.com/nikomatsakis/skill-tree"
 homepage = "https://github.com/nikomatsakis/skill-tree"
 
+
+[dependencies]
+
+
+[workspace]
+members = ["./", "./skill-tree-testlib"]

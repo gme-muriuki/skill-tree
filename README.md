@@ -1,50 +1,112 @@
 # skill-tree
 
-A tool for rendering "skill trees", currently using graphviz.
+skill-tree fetches a GitHub Project and renders it as a directed dependency graph.
 
 ## What is a skill tree?
 
-A "skill tree" is a useful way to try and map out the "roadmap" for a
-project. The term is borrowed from video games, but it was first
-applied to project planning in this rather wonderful [blog post about
-WebAssembly's post-MVP future][wasm] (at least, that was the first
-time I'd seen it used that way).
+A "skill tree" is a way to map out the roadmap for a project. The term is
+borrowed from video games, but it was first applied to project planning in
+this [blog post about WebAssembly's post-MVP future][wasm] — at least, that
+was the first time it was used that way.
+
 [wasm]: https://hacks.mozilla.org/2018/10/webassemblys-post-mvp-future/
 
-See an [example skill tree](https://nikomatsakis.github.io/skill-tree/)
-in this project's website.
+The idea: work items have dependencies, just like skills in a game. You cannot
+unlock the next thing until the current thing is done. Mapping those
+dependencies visually shows you the shape of a roadmap at a glance.
 
-## How to use
+## How it works
 
-### mdbook integration
+skill-tree reads a GitHub Project — issues, their blocking relationships, and
+their custom field values — and renders the result as a Graphviz DOT file or
+SVG. Each node is a GitHub issue. Each edge is a blocking relationship. Node
+color is driven by a custom field in GitHub Projects.
 
-The main way to use this project is to integrate it into an mdbook.
-Use these steps to install it:
+GitHub is the source of truth. There is no separate file to maintain.
 
-* `cargo install mdbook-skill-tree`
-    * installs the `mdbook-skill-tree` executable
-* in your mdbook's directory, `mdbook-skill-tree install`
-    * updates your `book.toml` to contain the relevant javascript files
-* in your mdbook, add a `skill-tree` code block, [as seen here](book/src/skill_tree.md).
-
-## run manually
-
-You can run `skill-tree` directly in which case it generates a `dot` file.
-For example:
+## Usage
 
 ```bash
-cargo run -- tree-data/example.toml example.dot
+# Render the dependency graph as SVG
+skill-tree render --format svg --output graph.svg
+
+# List open issues with no incoming blocking edges
+skill-tree unblocked
+
+# Check for cycles and dangling references
+skill-tree validate
 ```
 
-will transform the [`tree-data/example.toml`](tree-data/example.toml) 
-file you can find in this repository.
+## Configuration
 
-## Next steps
+Create a `.skill-tree.toml` in your project root:
 
-I should, of course, create a skill-tree for this project-- but the
-goal is to make this something that can be readily dropped into a
-working group repository (like [wg-traits]) and used to track the
-overall progress and plans of a project. The workflow isn't *quite*
-drag and drop enough for that yet, but we're close!
+```toml
+[github]
+owner   = "rust-lang"
+project = 42
 
-[wg-traits]: https://github.com/rust-lang/wg-traits
+[[field]]
+display-name = "status"
+github-name  = "Status"
+
+[colors]
+github-name = "Status"
+
+[colors.values]
+"In Progress" = "#4a90d9"
+"Blocked"     = "#e05252"
+"Complete"    = "#57a85a"
+"Not Started" = "#888888"
+```
+
+`owner` is the GitHub organization or user that owns the project.
+`project` is the project number from the GitHub Projects URL.
+
+Each `[[field]]` entry declares a GitHub Projects custom field that
+skill-tree should read. `github-name` is the field name as it appears
+in GitHub. `display-name` is how skill-tree refers to it internally.
+
+`[colors]` specifies which GitHub field drives node color (`github-name`)
+and maps that field's option values to hex colors (`[colors.values]`).
+
+## Installation
+
+```bash
+cargo install skill-tree
+```
+
+Rendering SVG requires Graphviz:
+
+```bash
+# macOS
+brew install graphviz
+
+# Ubuntu
+apt install graphviz
+```
+
+## Authentication
+
+skill-tree reads your GitHub token from the `GITHUB_TOKEN` environment
+variable:
+
+```bash
+export GITHUB_TOKEN=<your token>
+```
+
+The token requires `read:project` and `repo` scopes.
+
+## Documentation
+
+For architecture, design decisions, and contribution guide, see the
+[skill-tree design book](https://nikomatsakis.github.io/skill-tree/).
+
+## Status
+
+⚠️ **Early development** — expect frequent changes.
+
+## Community
+
+skill-tree is open source. We welcome contributors and maintain a
+[code of conduct](./CODE_OF_CONDUCT.md).
