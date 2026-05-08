@@ -12,19 +12,11 @@
 
 - [Introduction](./introduction.md)
 
-# User's guide
-
-- [Installing skill-tree](./guide/install.md)
-- [Configuration](./guide/configuration.md)
-- [Subcommands](./guide/subcommands.md)
-
 # Design
 
-- [Architecture](./design/architecture.md)
-- [GitHub as source of truth](./design/github-source-of-truth.md)
-- [Edge convention](./design/edge-convention.md)
-- [Node model](./design/node-model.md)
-- [Roadmap](./design/roadmap.md)
+- [Configuration](./design/01-config.md)
+- [GitHub client](./design/02-github-client.md)
+- [Project fetching](./design/project-fetch.md)
 
 # Contribution guide
 
@@ -32,4 +24,3 @@
 - [Important flows](./contributing/important-flows.md)
 - [Running tests](./contributing/running-tests.md)
 - [Common issues](./contributing/common-issues.md)
-- [Governance](./contributing/governance.md)
