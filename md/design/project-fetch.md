@@ -9,12 +9,13 @@ It owns the GraphQL queries for project metadata, project items, and sub-issue o
 ```rust
 pub async fn fetch_project(
     client: &GitHubClient,
-    owner: &str,
-    project_number: u32,
+    config: &Config,
 ) -> Result<ProjectFetch, GitHubError>;
 ```
 
 `ProjectFetch` carries the project metadata and the full item list. Pagination is internal — the caller never sees a cursor.
+
+`fetch_project()` runs the metadata query first, validates `Config` against the returned field definitions, and only then issues the items query. A typo in `.skill-tree.toml` fails fast after one cheap call instead of after the full paginated item fetch.
 
 ## Three queries
 
@@ -24,7 +25,7 @@ The metadata query runs once. It returns project title, field definitions, and f
 
 The items query is paginated at `first: 100`. For each item it returns `fieldValues`, the underlying `content` (Issue, PullRequest, DraftIssue), light per-item metadata, and an inline `subIssues(first: 50)` connection.
 
-The sub-issue overflow query is per-issue and lazy. It runs only when an issue's inline sub-issue connection reports `hasNextPage: true`, and only when the graph builder needs to expand that branch.
+The sub-issue overflow query runs per-issue when an inline sub-issue connection reports `hasNextPage: true`. `fetch_project()` resolves it before returning, so the graph layer always receives complete sub-issue lists.
 
 ## Field values
 
@@ -42,10 +43,10 @@ All four travel through the transport layer unfiltered. The graph layer decides 
 
 ## Sub-issue fetching
 
-`fetch_project()` resolves the sub-issues returned inline by the items query. When an issue's inline connection has more pages, `IssueContent::sub_issues` carries a `has_more: bool` flag. The graph builder calls `fetch_remaining_sub_issues(client, issue_id, after)` to retrieve the rest.
+The inline `first: 50` covers most projects. When an issue exceeds it, `fetch_project()` issues per-issue follow-up queries internally and returns the complete list. The graph layer never sees pagination state.
 
-The inline `first: 50` covers most projects. Only issues with more than 50 sub-issues require a follow-up query.
+GitHub caps `first` at 100, so an issue with 200 sub-issues costs two follow-up calls. Overflow is a long-tail event — most projects never trigger it.
 
 ## Errors
 
-`fetch_project()` returns `GitHubError` from `github/mod.rs` directly. `projects.rs` adds no new variants. If the project does not exist or the token cannot see it, the metadata query returns a `GitHubError::GraphQLError` with GitHub's upstream message.
+`fetch_project()` returns `GitHubError` from `github/mod.rs`. If the project does not exist or the token cannot see it, the metadata query returns a `GitHubError::GraphQLError` with GitHub's upstream message. Config-vs-metadata mismatches surface as `GitHubError::ConfigMismatch`, a new variant carrying the offending field or option name.

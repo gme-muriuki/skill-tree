@@ -17,6 +17,8 @@
 - [Configuration](./design/config.md)
 - [GitHub client](./design/github-client.md)
 - [Project fetching](./design/project-fetch.md)
+- [Node model](./design/node-model.md)
+- [Edge convention](./design/edge-convention.md)
 
 # Contribution guide
 
