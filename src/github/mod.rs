@@ -2,6 +2,8 @@
 //!
 //! This module is the only place in skill-tree that talks to GitHub.
 //! Everything else works with the typed structs from [`projects`] and [`issues`].
+//! 
+//! See `md/design/github_client.md` for the design.
 
 pub mod issues;
 pub mod projects;
