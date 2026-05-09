@@ -178,9 +178,18 @@ async fn meta_carries_text_number_date_and_iteration_field_kinds() {
     let client = gh.client(Duration::from_secs(10));
     let meta = fetch_project_meta(&client, "rust-lang", 42).await.unwrap();
 
-    assert!(matches!(meta.field_by_name("Notes").unwrap().kind, FieldKind::Text));
-    assert!(matches!(meta.field_by_name("Priority").unwrap().kind, FieldKind::Number));
-    assert!(matches!(meta.field_by_name("Due").unwrap().kind, FieldKind::Date));
+    assert!(matches!(
+        meta.field_by_name("Notes").unwrap().kind,
+        FieldKind::Text
+    ));
+    assert!(matches!(
+        meta.field_by_name("Priority").unwrap().kind,
+        FieldKind::Number
+    ));
+    assert!(matches!(
+        meta.field_by_name("Due").unwrap().kind,
+        FieldKind::Date
+    ));
 
     let FieldKind::Iteration { iterations } = &meta.field_by_name("Sprint").unwrap().kind else {
         panic!("expected Iteration field");

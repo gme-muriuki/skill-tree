@@ -270,8 +270,12 @@ pub enum FieldKind {
     Text,
     Number,
     Date,
-    SingleSelect { options: Vec<FieldOption> },
-    Iteration { iterations: Vec<Iteration> },
+    SingleSelect {
+        options: Vec<FieldOption>,
+    },
+    Iteration {
+        iterations: Vec<Iteration>,
+    },
     /// Any field type skill-tree does not recognize. Forward-compatible
     /// with future GitHub field kinds.
     Unknown,
@@ -562,7 +566,12 @@ mod tests {
             }
         "#};
         let v: FieldValue = serde_json::from_str(json).unwrap();
-        let FieldValue::SingleSelect { field, name, option_id } = v else {
+        let FieldValue::SingleSelect {
+            field,
+            name,
+            option_id,
+        } = v
+        else {
             panic!("expected SingleSelect, got {v:?}");
         };
         assert_eq!(field.name, "Status");
@@ -594,7 +603,12 @@ mod tests {
             }
         "#};
         let v: FieldValue = serde_json::from_str(json).unwrap();
-        let FieldValue::Iteration { field, title, start_date } = v else {
+        let FieldValue::Iteration {
+            field,
+            title,
+            start_date,
+        } = v
+        else {
             panic!("expected Iteration, got {v:?}");
         };
         assert_eq!(field.name, "Sprint");
@@ -670,7 +684,9 @@ mod tests {
     #[test]
     fn field_value_field_name_returns_name_for_known_variants_and_none_for_unknown() {
         let known = FieldValue::Text {
-            field: FieldRef { name: "Status".into() },
+            field: FieldRef {
+                name: "Status".into(),
+            },
             text: "t".into(),
         };
         assert_eq!(known.field_name(), Some("Status"));
@@ -839,7 +855,10 @@ mod tests {
             data_type: Some("NUMBER".into()),
             ..raw_field("ProjectV2Field")
         };
-        assert!(matches!(ProjectField::from_raw(raw).kind, FieldKind::Number));
+        assert!(matches!(
+            ProjectField::from_raw(raw).kind,
+            FieldKind::Number
+        ));
     }
 
     #[test]
@@ -857,15 +876,24 @@ mod tests {
             data_type: Some("FUTURE_TYPE".into()),
             ..raw_field("ProjectV2Field")
         };
-        assert!(matches!(ProjectField::from_raw(raw).kind, FieldKind::Unknown));
+        assert!(matches!(
+            ProjectField::from_raw(raw).kind,
+            FieldKind::Unknown
+        ));
     }
 
     #[test]
     fn project_field_single_select_carries_options() {
         let raw = RawProjectField {
             options: Some(vec![
-                FieldOption { id: "o1".into(), name: "Done".into() },
-                FieldOption { id: "o2".into(), name: "In progress".into() },
+                FieldOption {
+                    id: "o1".into(),
+                    name: "Done".into(),
+                },
+                FieldOption {
+                    id: "o2".into(),
+                    name: "In progress".into(),
+                },
             ]),
             ..raw_field("ProjectV2SingleSelectField")
         };
@@ -902,7 +930,10 @@ mod tests {
     #[test]
     fn project_field_unrecognized_typename_is_unknown() {
         let raw = raw_field("ProjectV2FutureField");
-        assert!(matches!(ProjectField::from_raw(raw).kind, FieldKind::Unknown));
+        assert!(matches!(
+            ProjectField::from_raw(raw).kind,
+            FieldKind::Unknown
+        ));
     }
 
     // -- ProjectMeta: deserialization end-to-end --
@@ -956,7 +987,10 @@ mod tests {
         assert_eq!(meta.owner_kind, OwnerKind::Organization);
         assert_eq!(meta.fields.len(), 3);
 
-        assert!(matches!(meta.field_by_name("Notes").unwrap().kind, FieldKind::Text));
+        assert!(matches!(
+            meta.field_by_name("Notes").unwrap().kind,
+            FieldKind::Text
+        ));
         assert!(matches!(
             meta.field_by_name("Status").unwrap().kind,
             FieldKind::SingleSelect { .. }
