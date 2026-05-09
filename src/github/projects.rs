@@ -4,7 +4,7 @@
 //! See `md/design/project-fetch.md` for the design.
 
 use crate::error::GitHubError;
-use crate::github::GitHubClient;
+use crate::github::{Connection, GitHubClient};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
@@ -170,7 +170,11 @@ pub struct IssueContent {
     pub body: String,
     pub repository: RepositoryRef,
     pub assignees: NodeList<UserRef>,
-    pub sub_issues: NodeList<SubIssueRef>,
+    /// Sub-issues from the inline `subIssues(first: 50)` connection on
+    /// the items query. After [`fetch_project`], `nodes` is the complete
+    /// list and `page_info.has_next_page` is `false` — overflow has been
+    /// resolved by [`resolve_sub_issue_overflow`].
+    pub sub_issues: Connection<SubIssueRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -511,6 +515,294 @@ pub async fn fetch_project_meta(
 }
 
 // ---------------------------------------------------------------------------
+// Items: query and pagination
+// ---------------------------------------------------------------------------
+
+/// GraphQL document for the project items query. Paginated by `$first` /
+/// `$after`. Each item carries its `fieldValues`, content (Issue,
+/// PullRequest, DraftIssue), and an inline `subIssues(first: 50)`
+/// connection. Issues with more than 50 sub-issues are resolved by a
+/// follow-up query in [`resolve_sub_issue_overflow`].
+const FETCH_PROJECT_ITEMS_QUERY: &str = r#"
+    query FetchProjectItems($projectId: ID!, $first: Int!, $after: String) {
+        node(id: $projectId) {
+            ... on ProjectV2 {
+                items(first: $first, after: $after) {
+                    nodes { ...ProjectItemFields }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+        }
+    }
+
+    fragment ProjectItemFields on ProjectV2Item {
+        id
+        fieldValues(first: 30) {
+            nodes {
+                __typename
+                ... on ProjectV2ItemFieldTextValue {
+                    field { ...FieldRefFields }
+                    text
+                }
+                ... on ProjectV2ItemFieldNumberValue {
+                    field { ...FieldRefFields }
+                    number
+                }
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                    field { ...FieldRefFields }
+                    name
+                    optionId
+                }
+                ... on ProjectV2ItemFieldDateValue {
+                    field { ...FieldRefFields }
+                    date
+                }
+                ... on ProjectV2ItemFieldIterationValue {
+                    field { ...FieldRefFields }
+                    title
+                    startDate
+                }
+            }
+        }
+        content {
+            __typename
+            ... on Issue {
+                id
+                number
+                title
+                url
+                state
+                body
+                repository { nameWithOwner }
+                assignees(first: 10) { nodes { login } }
+                subIssues(first: 50) {
+                    nodes {
+                        id
+                        number
+                        title
+                        url
+                        state
+                        repository { nameWithOwner }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+            ... on PullRequest {
+                id
+                number
+                title
+                url
+                state
+                body
+                repository { nameWithOwner }
+                assignees(first: 10) { nodes { login } }
+            }
+            ... on DraftIssue {
+                id
+                title
+                body
+                createdAt
+                assignees(first: 10) { nodes { login } }
+            }
+        }
+    }
+
+    fragment FieldRefFields on ProjectV2FieldConfiguration {
+        ... on ProjectV2Field { name }
+        ... on ProjectV2SingleSelectField { name }
+        ... on ProjectV2IterationField { name }
+    }
+"#;
+
+/// Items returned per request to GitHub. GitHub allows up to 100 per page.
+const ITEMS_PER_PAGE: u32 = 100;
+
+#[derive(Serialize)]
+struct ProjectItemsVariables<'a> {
+    #[serde(rename = "projectId")]
+    project_id: &'a str,
+    first: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<&'a str>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FetchProjectItemsResponse {
+    node: Option<ProjectItemsNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectItemsNode {
+    items: Connection<ProjectItem>,
+}
+
+/// Fetch every item on the project. Pages internally at 100 per request
+/// and stitches the results into a single flat `Vec<ProjectItem>`.
+///
+/// Sub-issues come back inline at `first: 50`. Overflow (issues with more
+/// than 50 sub-issues) is **not** resolved here — call
+/// [`resolve_sub_issue_overflow`] on the result before consuming.
+///
+/// Marked `#[doc(hidden)]`: the user-facing API is `fetch_project()`,
+/// which calls this internally. Public so integration tests can reach it.
+#[doc(hidden)]
+pub async fn fetch_project_items(
+    client: &GitHubClient,
+    project_id: &str,
+) -> Result<Vec<ProjectItem>, GitHubError> {
+    let mut items = Vec::new();
+    let mut after: Option<String> = None;
+
+    loop {
+        let response: FetchProjectItemsResponse = client
+            .query(
+                FETCH_PROJECT_ITEMS_QUERY,
+                ProjectItemsVariables {
+                    project_id,
+                    first: ITEMS_PER_PAGE,
+                    after: after.as_deref(),
+                },
+            )
+            .await?;
+
+        let node = response.node.ok_or_else(|| {
+            GitHubError::InvalidResponse(format!(
+                "items query returned null node for project '{project_id}'"
+            ))
+        })?;
+
+        items.extend(node.items.nodes);
+
+        if !node.items.page_info.has_next_page {
+            break;
+        }
+        // GitHub guarantees end_cursor when has_next_page is true; defend
+        // against a malformed response that breaks the invariant.
+        after = node.items.page_info.end_cursor;
+        if after.is_none() {
+            return Err(GitHubError::InvalidResponse(
+                "items pagination claimed has_next_page but returned no end_cursor".into(),
+            ));
+        }
+    }
+
+    Ok(items)
+}
+
+// ---------------------------------------------------------------------------
+// Sub-issue overflow
+// ---------------------------------------------------------------------------
+
+/// GraphQL document for the per-issue sub-issue overflow query. Used when
+/// an issue's inline `subIssues(first: 50)` connection has more pages.
+const FETCH_REMAINING_SUB_ISSUES_QUERY: &str = r#"
+    query FetchRemainingSubIssues($issueId: ID!, $first: Int!, $after: String!) {
+        node(id: $issueId) {
+            ... on Issue {
+                subIssues(first: $first, after: $after) {
+                    nodes {
+                        id
+                        number
+                        title
+                        url
+                        state
+                        repository { nameWithOwner }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+        }
+    }
+"#;
+
+/// Sub-issues per request when paginating overflow. GitHub's connection
+/// `first` cap is 100; fetching the maximum minimizes round-trips on
+/// issues with many children.
+const SUB_ISSUES_PER_PAGE: u32 = 100;
+
+#[derive(Serialize)]
+struct SubIssuesVariables<'a> {
+    #[serde(rename = "issueId")]
+    issue_id: &'a str,
+    first: u32,
+    after: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct FetchSubIssuesResponse {
+    node: Option<IssueSubIssuesNode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IssueSubIssuesNode {
+    sub_issues: Connection<SubIssueRef>,
+}
+
+/// Resolve sub-issue overflow in place. For each `Issue` whose inline
+/// connection reports `has_next_page: true`, follow up with the
+/// per-issue overflow query and append the remaining nodes. Sets
+/// `has_next_page: false` on every resolved issue so callers can rely
+/// on the invariant that `nodes` is the complete list.
+///
+/// Marked `#[doc(hidden)]`: called internally by `fetch_project()`.
+#[doc(hidden)]
+pub async fn resolve_sub_issue_overflow(
+    client: &GitHubClient,
+    items: &mut [ProjectItem],
+) -> Result<(), GitHubError> {
+    for item in items.iter_mut() {
+        if let ItemContent::Issue(ref mut issue) = item.content {
+            if !issue.sub_issues.page_info.has_next_page {
+                continue;
+            }
+            let Some(initial_cursor) = issue.sub_issues.page_info.end_cursor.clone() else {
+                return Err(GitHubError::InvalidResponse(format!(
+                    "issue '{}' inline sub-issues claimed has_next_page but returned no end_cursor",
+                    issue.id
+                )));
+            };
+            let mut after = Some(initial_cursor);
+            while let Some(cursor) = after.take() {
+                let response: FetchSubIssuesResponse = client
+                    .query(
+                        FETCH_REMAINING_SUB_ISSUES_QUERY,
+                        SubIssuesVariables {
+                            issue_id: &issue.id,
+                            first: SUB_ISSUES_PER_PAGE,
+                            after: &cursor,
+                        },
+                    )
+                    .await?;
+
+                let node = response.node.ok_or_else(|| {
+                    GitHubError::InvalidResponse(format!(
+                        "sub-issue overflow returned null node for issue '{}'",
+                        issue.id
+                    ))
+                })?;
+
+                issue.sub_issues.nodes.extend(node.sub_issues.nodes);
+
+                if node.sub_issues.page_info.has_next_page {
+                    after = node.sub_issues.page_info.end_cursor;
+                    if after.is_none() {
+                        return Err(GitHubError::InvalidResponse(
+                            "sub-issue overflow claimed has_next_page but returned no end_cursor"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+            // Resolved — graph layer can rely on the complete list.
+            issue.sub_issues.page_info.has_next_page = false;
+            issue.sub_issues.page_info.end_cursor = None;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -708,7 +1000,10 @@ mod tests {
                 "body": "details",
                 "repository": { "nameWithOwner": "o/r" },
                 "assignees": { "nodes": [{ "login": "octocat" }] },
-                "subIssues": { "nodes": [] }
+                "subIssues": {
+                    "nodes": [],
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
+                }
             }
         "#};
         let c: ItemContent = serde_json::from_str(json).unwrap();
@@ -720,6 +1015,7 @@ mod tests {
         assert_eq!(issue.repository.name_with_owner, "o/r");
         assert_eq!(issue.assignees.nodes[0].login, "octocat");
         assert!(issue.sub_issues.nodes.is_empty());
+        assert!(!issue.sub_issues.page_info.has_next_page);
     }
 
     #[test]
@@ -810,7 +1106,10 @@ mod tests {
                     "body": "details",
                     "repository": { "nameWithOwner": "o/r" },
                     "assignees": { "nodes": [] },
-                    "subIssues": { "nodes": [] }
+                    "subIssues": {
+                        "nodes": [],
+                        "pageInfo": { "hasNextPage": false, "endCursor": null }
+                    }
                 }
             }
         "#};
