@@ -1,8 +1,12 @@
-//! GitHub Projects V2 queries: response types for the items connection.
+//! GitHub Projects V2 queries: response types for the items connection
+//! and the project metadata fetch.
 //!
 //! See `md/design/project-fetch.md` for the design.
 
-use serde::{Deserialize, Deserializer};
+use crate::error::GitHubError;
+use crate::github::GitHubClient;
+use serde::{Deserialize, Deserializer, Serialize};
+use std::fmt;
 
 // ---------------------------------------------------------------------------
 // Connection helpers
@@ -214,6 +218,292 @@ where
 {
     let opt: Option<ItemContent> = Option::deserialize(d)?;
     Ok(opt.unwrap_or(ItemContent::Redacted))
+}
+
+// ---------------------------------------------------------------------------
+// Project metadata
+// ---------------------------------------------------------------------------
+//
+// `ProjectMeta` is the result of a single GraphQL document that probes both
+// `organization(login: $owner)` and `user(login: $owner)` in one round-trip
+// (the namespaces are disjoint, so at most one branch is non-null). The
+// `owner_kind` recorded on `ProjectMeta` lets later queries — items, issue
+// detail — pick the correct root selector without re-discovering it.
+
+/// Whether a project's owner is an organization or a personal user account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerKind {
+    Organization,
+    User,
+}
+
+impl fmt::Display for OwnerKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OwnerKind::Organization => write!(f, "organization"),
+            OwnerKind::User => write!(f, "user"),
+        }
+    }
+}
+
+/// One option of a SingleSelect field.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FieldOption {
+    pub id: String,
+    pub name: String,
+}
+
+/// One iteration of an Iteration field.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Iteration {
+    pub id: String,
+    pub title: String,
+    pub start_date: String,
+    pub duration: u32,
+}
+
+/// Type-specific payload of a project field. The header (`id`, `name`)
+/// lives on [`ProjectField`]; only the type-discriminated extras live here.
+#[derive(Debug, Clone)]
+pub enum FieldKind {
+    Text,
+    Number,
+    Date,
+    SingleSelect { options: Vec<FieldOption> },
+    Iteration { iterations: Vec<Iteration> },
+    /// Any field type skill-tree does not recognize. Forward-compatible
+    /// with future GitHub field kinds.
+    Unknown,
+}
+
+/// One field defined on the project.
+#[derive(Debug, Clone)]
+pub struct ProjectField {
+    pub id: String,
+    pub name: String,
+    pub kind: FieldKind,
+}
+
+/// Project-level metadata: identity, title, owner kind, and field defs.
+/// Returned by [`fetch_project_meta`] and consumed by `Config::validate_against`.
+#[derive(Debug, Clone)]
+pub struct ProjectMeta {
+    pub id: String,
+    pub title: String,
+    pub owner_kind: OwnerKind,
+    pub fields: Vec<ProjectField>,
+}
+
+impl ProjectMeta {
+    /// Find a field by its GitHub-side name. Used by config validation
+    /// to resolve `[colors] field = "..."` and `[cluster] field = "..."`.
+    pub fn field_by_name(&self, name: &str) -> Option<&ProjectField> {
+        self.fields.iter().find(|f| f.name == name)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Metadata: raw deserialization shape
+// ---------------------------------------------------------------------------
+//
+// GitHub's `ProjectV2FieldConfiguration` is a union with three concrete
+// types. We deserialize a flat `RawProjectField` that captures the
+// superset of fields, then collapse to the typed `ProjectField` /
+// `FieldKind` shape in code. This keeps `Unknown` cheap (no data loss
+// for `id` / `name`) and avoids fighting serde over a multi-tag union.
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawProjectField {
+    #[serde(rename = "__typename")]
+    typename: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    data_type: Option<String>,
+    #[serde(default)]
+    options: Option<Vec<FieldOption>>,
+    #[serde(default)]
+    configuration: Option<RawIterationConfiguration>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawIterationConfiguration {
+    iterations: Vec<Iteration>,
+}
+
+impl ProjectField {
+    fn from_raw(raw: RawProjectField) -> Self {
+        let kind = match raw.typename.as_str() {
+            "ProjectV2Field" => match raw.data_type.as_deref() {
+                Some("TEXT") => FieldKind::Text,
+                Some("NUMBER") => FieldKind::Number,
+                Some("DATE") => FieldKind::Date,
+                _ => FieldKind::Unknown,
+            },
+            "ProjectV2SingleSelectField" => FieldKind::SingleSelect {
+                options: raw.options.unwrap_or_default(),
+            },
+            "ProjectV2IterationField" => FieldKind::Iteration {
+                iterations: raw.configuration.map(|c| c.iterations).unwrap_or_default(),
+            },
+            _ => FieldKind::Unknown,
+        };
+        ProjectField {
+            id: raw.id,
+            name: raw.name,
+            kind,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawProjectMeta {
+    id: String,
+    title: String,
+    fields: NodeList<RawProjectField>,
+}
+
+impl ProjectMeta {
+    fn from_raw(raw: RawProjectMeta, owner_kind: OwnerKind) -> Self {
+        Self {
+            id: raw.id,
+            title: raw.title,
+            owner_kind,
+            fields: raw
+                .fields
+                .nodes
+                .into_iter()
+                .map(ProjectField::from_raw)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OwnerProjectV2 {
+    #[serde(rename = "projectV2")]
+    project_v2: Option<RawProjectMeta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FetchProjectMetaResponse {
+    organization: Option<OwnerProjectV2>,
+    user: Option<OwnerProjectV2>,
+}
+
+#[derive(Serialize)]
+struct ProjectMetaVariables<'a> {
+    owner: &'a str,
+    number: u32,
+}
+
+// ---------------------------------------------------------------------------
+// Metadata: fetch
+// ---------------------------------------------------------------------------
+
+/// GraphQL document for the project metadata query. Probes `organization`
+/// and `user` in one round-trip; at most one is non-null.
+const FETCH_PROJECT_META_QUERY: &str = r#"
+    query FetchProjectMeta($owner: String!, $number: Int!) {
+        organization(login: $owner) {
+            projectV2(number: $number) {
+                ...ProjectMetaFields
+            }
+        }
+        user(login: $owner) {
+            projectV2(number: $number) {
+                ...ProjectMetaFields
+            }
+        }
+    }
+
+    fragment ProjectMetaFields on ProjectV2 {
+        id
+        title
+        fields(first: 100) {
+            nodes {
+                __typename
+                ... on ProjectV2Field {
+                    id
+                    name
+                    dataType
+                }
+                ... on ProjectV2SingleSelectField {
+                    id
+                    name
+                    options {
+                        id
+                        name
+                    }
+                }
+                ... on ProjectV2IterationField {
+                    id
+                    name
+                    configuration {
+                        iterations {
+                            id
+                            title
+                            startDate
+                            duration
+                        }
+                    }
+                }
+            }
+        }
+    }
+"#;
+
+/// Fetch project-level metadata: title, field definitions, and owner kind.
+///
+/// Returns [`GitHubError::OwnerUnreachable`] when neither `organization`
+/// nor `user` resolves the login (nonexistent owner, or owner private to
+/// the token). Returns [`GitHubError::ProjectNotFound`] when the owner
+/// resolves but has no project with the given number.
+///
+/// Marked `#[doc(hidden)]`: the user-facing API is `fetch_project()`,
+/// which calls this internally. Public so integration tests can reach it.
+#[doc(hidden)]
+pub async fn fetch_project_meta(
+    client: &GitHubClient,
+    owner: &str,
+    number: u32,
+) -> Result<ProjectMeta, GitHubError> {
+    let response: FetchProjectMetaResponse = client
+        .query(
+            FETCH_PROJECT_META_QUERY,
+            ProjectMetaVariables { owner, number },
+        )
+        .await?;
+
+    if let Some(org) = response.organization {
+        return match org.project_v2 {
+            Some(raw) => Ok(ProjectMeta::from_raw(raw, OwnerKind::Organization)),
+            None => Err(GitHubError::ProjectNotFound {
+                owner: owner.to_string(),
+                number,
+                owner_kind: OwnerKind::Organization,
+            }),
+        };
+    }
+
+    if let Some(user) = response.user {
+        return match user.project_v2 {
+            Some(raw) => Ok(ProjectMeta::from_raw(raw, OwnerKind::User)),
+            None => Err(GitHubError::ProjectNotFound {
+                owner: owner.to_string(),
+                number,
+                owner_kind: OwnerKind::User,
+            }),
+        };
+    }
+
+    Err(GitHubError::OwnerUnreachable {
+        owner: owner.to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -516,5 +806,171 @@ mod tests {
         };
         assert_eq!(name, "In Progress");
         assert!(matches!(item.content, ItemContent::Issue(_)));
+    }
+
+    // -- ProjectField: from_raw routing --
+
+    fn raw_field(typename: &str) -> RawProjectField {
+        RawProjectField {
+            typename: typename.into(),
+            id: "F_1".into(),
+            name: "field".into(),
+            data_type: None,
+            options: None,
+            configuration: None,
+        }
+    }
+
+    #[test]
+    fn project_field_text_routes_from_data_type() {
+        let raw = RawProjectField {
+            data_type: Some("TEXT".into()),
+            ..raw_field("ProjectV2Field")
+        };
+        let field = ProjectField::from_raw(raw);
+        assert!(matches!(field.kind, FieldKind::Text));
+        assert_eq!(field.id, "F_1");
+        assert_eq!(field.name, "field");
+    }
+
+    #[test]
+    fn project_field_number_routes_from_data_type() {
+        let raw = RawProjectField {
+            data_type: Some("NUMBER".into()),
+            ..raw_field("ProjectV2Field")
+        };
+        assert!(matches!(ProjectField::from_raw(raw).kind, FieldKind::Number));
+    }
+
+    #[test]
+    fn project_field_date_routes_from_data_type() {
+        let raw = RawProjectField {
+            data_type: Some("DATE".into()),
+            ..raw_field("ProjectV2Field")
+        };
+        assert!(matches!(ProjectField::from_raw(raw).kind, FieldKind::Date));
+    }
+
+    #[test]
+    fn project_field_unknown_data_type_falls_through_to_unknown() {
+        let raw = RawProjectField {
+            data_type: Some("FUTURE_TYPE".into()),
+            ..raw_field("ProjectV2Field")
+        };
+        assert!(matches!(ProjectField::from_raw(raw).kind, FieldKind::Unknown));
+    }
+
+    #[test]
+    fn project_field_single_select_carries_options() {
+        let raw = RawProjectField {
+            options: Some(vec![
+                FieldOption { id: "o1".into(), name: "Done".into() },
+                FieldOption { id: "o2".into(), name: "In progress".into() },
+            ]),
+            ..raw_field("ProjectV2SingleSelectField")
+        };
+        let field = ProjectField::from_raw(raw);
+        let FieldKind::SingleSelect { options } = field.kind else {
+            panic!("expected SingleSelect");
+        };
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].name, "Done");
+    }
+
+    #[test]
+    fn project_field_iteration_carries_iterations() {
+        let raw = RawProjectField {
+            configuration: Some(RawIterationConfiguration {
+                iterations: vec![Iteration {
+                    id: "i1".into(),
+                    title: "Sprint 1".into(),
+                    start_date: "2026-05-01".into(),
+                    duration: 14,
+                }],
+            }),
+            ..raw_field("ProjectV2IterationField")
+        };
+        let field = ProjectField::from_raw(raw);
+        let FieldKind::Iteration { iterations } = field.kind else {
+            panic!("expected Iteration");
+        };
+        assert_eq!(iterations.len(), 1);
+        assert_eq!(iterations[0].title, "Sprint 1");
+        assert_eq!(iterations[0].duration, 14);
+    }
+
+    #[test]
+    fn project_field_unrecognized_typename_is_unknown() {
+        let raw = raw_field("ProjectV2FutureField");
+        assert!(matches!(ProjectField::from_raw(raw).kind, FieldKind::Unknown));
+    }
+
+    // -- ProjectMeta: deserialization end-to-end --
+
+    #[test]
+    fn raw_project_meta_deserializes_with_mixed_field_kinds() {
+        let json = indoc! {r#"
+            {
+                "id": "PVT_1",
+                "title": "skill tree v3",
+                "fields": {
+                    "nodes": [
+                        {
+                            "__typename": "ProjectV2Field",
+                            "id": "F_a",
+                            "name": "Notes",
+                            "dataType": "TEXT"
+                        },
+                        {
+                            "__typename": "ProjectV2SingleSelectField",
+                            "id": "F_b",
+                            "name": "Status",
+                            "options": [
+                                { "id": "o1", "name": "Done" }
+                            ]
+                        },
+                        {
+                            "__typename": "ProjectV2IterationField",
+                            "id": "F_c",
+                            "name": "Sprint",
+                            "configuration": {
+                                "iterations": [
+                                    {
+                                        "id": "i1",
+                                        "title": "Sprint 1",
+                                        "startDate": "2026-05-01",
+                                        "duration": 14
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        "#};
+        let raw: RawProjectMeta = serde_json::from_str(json).unwrap();
+        let meta = ProjectMeta::from_raw(raw, OwnerKind::Organization);
+
+        assert_eq!(meta.id, "PVT_1");
+        assert_eq!(meta.title, "skill tree v3");
+        assert_eq!(meta.owner_kind, OwnerKind::Organization);
+        assert_eq!(meta.fields.len(), 3);
+
+        assert!(matches!(meta.field_by_name("Notes").unwrap().kind, FieldKind::Text));
+        assert!(matches!(
+            meta.field_by_name("Status").unwrap().kind,
+            FieldKind::SingleSelect { .. }
+        ));
+        assert!(matches!(
+            meta.field_by_name("Sprint").unwrap().kind,
+            FieldKind::Iteration { .. }
+        ));
+        assert!(meta.field_by_name("missing").is_none());
+    }
+
+    #[test]
+    fn owner_kind_displays_lowercase_words() {
+        assert_eq!(OwnerKind::Organization.to_string(), "organization");
+        assert_eq!(OwnerKind::User.to_string(), "user");
     }
 }

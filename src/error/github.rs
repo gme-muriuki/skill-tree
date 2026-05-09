@@ -6,6 +6,7 @@
 //! callers that want that context should wrap these errors at their
 //! call site.
 
+use crate::github::projects::OwnerKind;
 use std::fmt;
 
 /// Error returned by the GitHub GraphQL client.
@@ -56,6 +57,23 @@ pub enum GitHubError {
     /// Request exceeded the configured timeout.
     #[error("request timeout after {0}s")]
     Timeout(u64),
+
+    /// Neither `organization(login: $owner)` nor `user(login: $owner)`
+    /// returned a non-null node. The owner does not exist, or the token
+    /// lacks the scope to see it (GitHub returns null in both cases).
+    #[error(
+        "no organization or user named '{owner}' visible to this token \
+         (it may not exist or your token may lack access)"
+    )]
+    OwnerUnreachable { owner: String },
+
+    /// Owner exists but has no project with the given number.
+    #[error("project #{number} not found under {owner_kind} '{owner}'")]
+    ProjectNotFound {
+        owner: String,
+        number: u32,
+        owner_kind: OwnerKind,
+    },
 }
 
 /// Category of network-level failure.
@@ -92,7 +110,9 @@ impl GitHubError {
             | GitHubError::HttpError { .. }
             | GitHubError::GraphQLError(_)
             | GitHubError::RateLimited { .. }
-            | GitHubError::Timeout(_) => 3,
+            | GitHubError::Timeout(_)
+            | GitHubError::OwnerUnreachable { .. }
+            | GitHubError::ProjectNotFound { .. } => 3,
             GitHubError::InvalidResponse(_) => 1,
         }
     }
@@ -152,6 +172,37 @@ mod tests {
     fn invalid_response_exit_code() {
         let err = GitHubError::InvalidResponse("no data, no errors".into());
         assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn owner_unreachable_exit_code() {
+        let err = GitHubError::OwnerUnreachable {
+            owner: "rust-lan".into(),
+        };
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn project_not_found_exit_code() {
+        let err = GitHubError::ProjectNotFound {
+            owner: "rust-lang".into(),
+            number: 4242,
+            owner_kind: OwnerKind::Organization,
+        };
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn project_not_found_display_includes_owner_kind() {
+        let err = GitHubError::ProjectNotFound {
+            owner: "rust-lang".into(),
+            number: 42,
+            owner_kind: OwnerKind::Organization,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("organization"));
+        assert!(msg.contains("rust-lang"));
+        assert!(msg.contains("42"));
     }
 
     #[test]
