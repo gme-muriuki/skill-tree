@@ -71,12 +71,11 @@ impl MockGitHub {
 
     /// 200 response with a non-empty GraphQL `errors` array.
     pub fn graphql_error(&self, message: &str) -> MockHandle {
-        self.matcher().respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        self.matcher()
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": null,
                 "errors": [{ "message": message }],
-            })),
-        )
+            })))
     }
 
     /// 200 response with neither `data` nor `errors` — exercises

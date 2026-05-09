@@ -23,11 +23,21 @@ struct Hello {
 async fn retries_5xx_then_succeeds_and_returns_data() {
     let gh = MockGitHub::start().await;
     gh.status(503).up_to_n_times(1).mount(&gh.server).await;
-    gh.ok_data(json!({ "hello": "world" })).mount(&gh.server).await;
+    gh.ok_data(json!({ "hello": "world" }))
+        .mount(&gh.server)
+        .await;
 
     let client = gh.client(Duration::from_secs(10));
-    let resp: Hello = client.query("query Q { hello }", EmptyVars {}).await.unwrap();
-    assert_eq!(resp, Hello { hello: "world".into() });
+    let resp: Hello = client
+        .query("query Q { hello }", EmptyVars {})
+        .await
+        .unwrap();
+    assert_eq!(
+        resp,
+        Hello {
+            hello: "world".into()
+        }
+    );
 }
 
 #[tokio::test]
@@ -57,11 +67,21 @@ async fn gives_up_after_max_retries_returning_last_real_error() {
 async fn rate_limit_within_budget_waits_and_retries() {
     let gh = MockGitHub::start().await;
     gh.rate_limited(1).up_to_n_times(1).mount(&gh.server).await;
-    gh.ok_data(json!({ "hello": "world" })).mount(&gh.server).await;
+    gh.ok_data(json!({ "hello": "world" }))
+        .mount(&gh.server)
+        .await;
 
     let client = gh.client(Duration::from_secs(10));
-    let resp: Hello = client.query("query Q { hello }", EmptyVars {}).await.unwrap();
-    assert_eq!(resp, Hello { hello: "world".into() });
+    let resp: Hello = client
+        .query("query Q { hello }", EmptyVars {})
+        .await
+        .unwrap();
+    assert_eq!(
+        resp,
+        Hello {
+            hello: "world".into()
+        }
+    );
 }
 
 #[tokio::test]
@@ -118,7 +138,10 @@ async fn invalid_response_when_envelope_has_neither_data_nor_errors() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, GitHubError::InvalidResponse(_)), "got {err:?}");
+    assert!(
+        matches!(err, GitHubError::InvalidResponse(_)),
+        "got {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -136,7 +159,10 @@ async fn sends_api_version_and_authorization_headers() {
     .await;
 
     let client = gh.client(Duration::from_secs(10));
-    let _: Hello = client.query("query Q { hello }", EmptyVars {}).await.unwrap();
+    let _: Hello = client
+        .query("query Q { hello }", EmptyVars {})
+        .await
+        .unwrap();
     // Mock's `.expect(1)` is verified on drop — if headers were wrong, no
     // mock would have matched and the assertion would fail there.
 }
