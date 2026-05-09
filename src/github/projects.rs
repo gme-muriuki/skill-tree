@@ -115,13 +115,6 @@ pub struct UserRef {
     pub login: String,
 }
 
-/// A label attached to an issue or pull request.
-#[derive(Debug, Clone, Deserialize)]
-pub struct LabelRef {
-    pub name: String,
-    pub color: String,
-}
-
 /// Reference to a sub-issue. Carries enough to render a graph node;
 /// the full sub-issue is fetched separately if the graph layer expands it.
 #[derive(Debug, Clone, Deserialize)]
@@ -173,7 +166,6 @@ pub struct IssueContent {
     pub body: String,
     pub repository: RepositoryRef,
     pub assignees: NodeList<UserRef>,
-    pub labels: NodeList<LabelRef>,
     pub sub_issues: NodeList<SubIssueRef>,
 }
 
@@ -188,14 +180,15 @@ pub struct PullRequestContent {
     pub body: String,
     pub repository: RepositoryRef,
     pub assignees: NodeList<UserRef>,
-    pub labels: NodeList<LabelRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DraftIssueContent {
     pub id: String,
     pub title: String,
     pub body: String,
+    pub created_at: String,
     pub assignees: NodeList<UserRef>,
 }
 
@@ -409,7 +402,6 @@ mod tests {
                 "body": "details",
                 "repository": { "nameWithOwner": "o/r" },
                 "assignees": { "nodes": [{ "login": "octocat" }] },
-                "labels":    { "nodes": [{ "name": "bug", "color": "ff0000" }] },
                 "subIssues": { "nodes": [] }
             }
         "#};
@@ -421,7 +413,6 @@ mod tests {
         assert_eq!(issue.title, "Parser rewrite");
         assert_eq!(issue.repository.name_with_owner, "o/r");
         assert_eq!(issue.assignees.nodes[0].login, "octocat");
-        assert_eq!(issue.labels.nodes[0].name, "bug");
         assert!(issue.sub_issues.nodes.is_empty());
     }
 
@@ -437,8 +428,7 @@ mod tests {
                 "state": "MERGED",
                 "body": "fixes",
                 "repository": { "nameWithOwner": "o/r" },
-                "assignees": { "nodes": [] },
-                "labels":    { "nodes": [] }
+                "assignees": { "nodes": [] }
             }
         "#};
         let c: ItemContent = serde_json::from_str(json).unwrap();
@@ -453,11 +443,16 @@ mod tests {
                 "id": "DI_1",
                 "title": "Idea: cache layer",
                 "body": "tbd",
+                "createdAt": "2026-04-01T12:00:00Z",
                 "assignees": { "nodes": [] }
             }
         "#};
         let c: ItemContent = serde_json::from_str(json).unwrap();
-        assert!(matches!(c, ItemContent::DraftIssue(_)));
+        let ItemContent::DraftIssue(draft) = c else {
+            panic!("expected DraftIssue, got {c:?}");
+        };
+        assert_eq!(draft.title, "Idea: cache layer");
+        assert_eq!(draft.created_at, "2026-04-01T12:00:00Z");
     }
 
     // -- ItemContent: redacted paths --
@@ -509,7 +504,6 @@ mod tests {
                     "body": "details",
                     "repository": { "nameWithOwner": "o/r" },
                     "assignees": { "nodes": [] },
-                    "labels":    { "nodes": [] },
                     "subIssues": { "nodes": [] }
                 }
             }
