@@ -21,7 +21,7 @@ pub async fn fetch_project(
 
 Project metadata, project items, and sub-issue overflow are three separate GraphQL documents.
 
-The metadata query runs once. It returns project title, field definitions, and field options. `Config` validation depends on this data.
+The metadata query runs once. It returns project title, field definitions, and field options. `Config` validation depends on this data. The query probes both `organization(login: $owner)` and `user(login: $owner)` in one document; GitHub's account namespaces are disjoint, so at most one branch is non-null. The resolved kind is recorded on `ProjectMeta` so later queries reuse it without re-discovering.
 
 The items query is paginated at `first: 100`. For each item it returns `fieldValues`, the underlying `content` (Issue, PullRequest, DraftIssue), light per-item metadata, and an inline `subIssues(first: 50)` connection.
 

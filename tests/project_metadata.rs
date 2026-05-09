@@ -10,31 +10,29 @@ use skill_tree::error::GitHubError;
 use skill_tree::github::projects::{FieldKind, OwnerKind, fetch_project_meta};
 use skill_tree_testlib::MockGitHub;
 
-fn project_meta_fixture() -> serde_json::Value {
-    json!({
-        "id": "PVT_1",
-        "title": "rust-lang skill tree",
-        "fields": {
-            "nodes": [
-                {
-                    "__typename": "ProjectV2SingleSelectField",
-                    "id": "F_status",
-                    "name": "Status",
-                    "options": [
-                        { "id": "o_done",        "name": "Done" },
-                        { "id": "o_inprogress",  "name": "In progress" }
-                    ]
-                }
-            ]
-        }
-    })
-}
-
 #[tokio::test]
 async fn org_with_project_returns_meta_with_organization_kind() {
     let gh = MockGitHub::start().await;
     gh.ok_data(json!({
-        "organization": { "projectV2": project_meta_fixture() },
+        "organization": {
+            "projectV2": {
+                "id": "PVT_1",
+                "title": "rust-lang skill tree",
+                "fields": {
+                    "nodes": [
+                        {
+                            "__typename": "ProjectV2SingleSelectField",
+                            "id": "F_status",
+                            "name": "Status",
+                            "options": [
+                                { "id": "o_done",       "name": "Done" },
+                                { "id": "o_inprogress", "name": "In progress" }
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
         "user": null
     }))
     .mount(&gh.server)
@@ -57,7 +55,13 @@ async fn user_with_project_returns_meta_with_user_kind() {
     let gh = MockGitHub::start().await;
     gh.ok_data(json!({
         "organization": null,
-        "user": { "projectV2": project_meta_fixture() }
+        "user": {
+            "projectV2": {
+                "id": "PVT_1",
+                "title": "personal skill tree",
+                "fields": { "nodes": [] }
+            }
+        }
     }))
     .mount(&gh.server)
     .await;
