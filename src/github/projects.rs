@@ -3,6 +3,7 @@
 //!
 //! See `md/design/project-fetch.md` for the design.
 
+use crate::config::Config;
 use crate::error::GitHubError;
 use crate::github::{Connection, GitHubClient};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -406,7 +407,7 @@ struct FetchProjectMetaResponse {
 #[derive(Serialize)]
 struct ProjectMetaVariables<'a> {
     owner: &'a str,
-    number: u32,
+    number: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -478,7 +479,7 @@ const FETCH_PROJECT_META_QUERY: &str = r#"
 pub async fn fetch_project_meta(
     client: &GitHubClient,
     owner: &str,
-    number: u32,
+    number: u64,
 ) -> Result<ProjectMeta, GitHubError> {
     let response: FetchProjectMetaResponse = client
         .query(
@@ -800,6 +801,44 @@ pub async fn resolve_sub_issue_overflow(
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+/// The full result of a project fetch: metadata plus every project item
+/// with sub-issues fully resolved. Consumed by the graph layer.
+#[derive(Debug, Clone)]
+pub struct ProjectFetch {
+    pub meta: ProjectMeta,
+    pub items: Vec<ProjectItem>,
+}
+
+/// Fetch a GitHub Projects V2 board into a typed `ProjectFetch`.
+///
+/// Sequence:
+/// 1. Metadata query (one round-trip; resolves owner kind).
+/// 2. `Config::validate_against(&meta)` — fails fast with
+///    [`GitHubError::ConfigMismatch`] before any item fetch, so a
+///    misconfigured field name costs only one cheap call.
+/// 3. Items query, paginated.
+/// 4. Sub-issue overflow resolved in place; the graph layer never sees
+///    pagination state.
+pub async fn fetch_project(
+    client: &GitHubClient,
+    config: &Config,
+) -> Result<ProjectFetch, GitHubError> {
+    let meta = fetch_project_meta(client, &config.github.owner, config.github.project).await?;
+
+    config
+        .validate_against(&meta)
+        .map_err(|issues| GitHubError::ConfigMismatch { issues })?;
+
+    let mut items = fetch_project_items(client, &meta.id).await?;
+    resolve_sub_issue_overflow(client, &mut items).await?;
+
+    Ok(ProjectFetch { meta, items })
 }
 
 // ---------------------------------------------------------------------------

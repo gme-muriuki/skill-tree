@@ -1,8 +1,5 @@
 //! Integration tests for `GitHubClient` against a mock GraphQL endpoint.
 //!
-//! Only imports the public API of `skill_tree` and the test infrastructure
-//! exposed by `skill_tree_testlib`. The wiremock plumbing lives in the
-//! testlib so individual tests stay focused on the scenario.
 
 use std::time::Duration;
 

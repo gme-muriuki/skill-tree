@@ -1,5 +1,6 @@
 //! Configuration file errors.
 
+use std::fmt;
 use std::path::PathBuf;
 
 /// Error returned when loading or validating a config file.
@@ -33,6 +34,64 @@ pub enum ConfigError {
         /// The invalid color value.
         value: String,
     },
+}
+
+/// One concrete way `.skill-tree.toml` disagrees with the project metadata
+/// returned by GitHub. Multiple issues may be reported together via
+/// `GitHubError::ConfigMismatch`.
+#[derive(Debug, Clone)]
+pub enum ConfigIssue {
+    /// Config references a field name that does not exist on the project.
+    FieldNotFound {
+        /// Which TOML section referenced the missing field
+        /// (e.g. `"colors"`, `"field"`).
+        section: &'static str,
+        /// The name as it appears in `.skill-tree.toml`.
+        name: String,
+    },
+    /// Config references a real field but the field is the wrong kind
+    /// (e.g. `[colors] github-name` pointed at a TEXT field).
+    FieldWrongType {
+        /// Which TOML section referenced the field.
+        section: &'static str,
+        /// The field name.
+        name: String,
+        /// The kind the section requires.
+        expected: &'static str,
+        /// The kind GitHub actually reports.
+        actual: &'static str,
+    },
+    /// Config references a SingleSelect option name that is not on the
+    /// field's option list (typo, or the option was removed in GitHub).
+    OptionNotFound {
+        /// The field whose options were searched.
+        field: String,
+        /// The value name from `[colors.values]`.
+        value: String,
+    },
+}
+
+impl fmt::Display for ConfigIssue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigIssue::FieldNotFound { section, name } => write!(
+                f,
+                "[{section}] field {name:?} does not exist on the project"
+            ),
+            ConfigIssue::FieldWrongType {
+                section,
+                name,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "[{section}] field {name:?} is type {actual}, expected {expected}"
+            ),
+            ConfigIssue::OptionNotFound { field, value } => {
+                write!(f, "[colors.values] {value:?} is not an option of {field:?}")
+            }
+        }
+    }
 }
 
 impl ConfigError {

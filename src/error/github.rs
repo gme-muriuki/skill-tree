@@ -6,6 +6,7 @@
 //! callers that want that context should wrap these errors at their
 //! call site.
 
+use crate::error::ConfigIssue;
 use crate::github::projects::OwnerKind;
 use std::fmt;
 
@@ -71,9 +72,27 @@ pub enum GitHubError {
     #[error("project #{number} not found under {owner_kind} '{owner}'")]
     ProjectNotFound {
         owner: String,
-        number: u32,
+        number: u64,
         owner_kind: OwnerKind,
     },
+
+    /// `.skill-tree.toml` references fields or option values that do not
+    /// match the project's metadata. All issues found are reported together.
+    #[error("{}", format_config_mismatch(.issues))]
+    ConfigMismatch { issues: Vec<ConfigIssue> },
+}
+
+fn format_config_mismatch(issues: &[ConfigIssue]) -> String {
+    use std::fmt::Write;
+    let mut out = format!(
+        "{} config issue{}:",
+        issues.len(),
+        if issues.len() == 1 { "" } else { "s" }
+    );
+    for issue in issues {
+        write!(out, "\n  {issue}").expect("writing to a String never fails");
+    }
+    out
 }
 
 /// Category of network-level failure.
@@ -113,6 +132,7 @@ impl GitHubError {
             | GitHubError::Timeout(_)
             | GitHubError::OwnerUnreachable { .. }
             | GitHubError::ProjectNotFound { .. } => 3,
+            GitHubError::ConfigMismatch { .. } => 4,
             GitHubError::InvalidResponse(_) => 1,
         }
     }
@@ -190,6 +210,37 @@ mod tests {
             owner_kind: OwnerKind::Organization,
         };
         assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn config_mismatch_exit_code() {
+        let err = GitHubError::ConfigMismatch {
+            issues: vec![ConfigIssue::FieldNotFound {
+                section: "colors",
+                name: "Statu".into(),
+            }],
+        };
+        assert_eq!(err.exit_code(), 4);
+    }
+
+    #[test]
+    fn config_mismatch_display_lists_each_issue() {
+        let err = GitHubError::ConfigMismatch {
+            issues: vec![
+                ConfigIssue::FieldNotFound {
+                    section: "colors",
+                    name: "Statu".into(),
+                },
+                ConfigIssue::OptionNotFound {
+                    field: "Status".into(),
+                    value: "Don done".into(),
+                },
+            ],
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("2 config issues"));
+        assert!(msg.contains("Statu"));
+        assert!(msg.contains("Don done"));
     }
 
     #[test]

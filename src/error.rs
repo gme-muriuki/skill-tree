@@ -10,5 +10,5 @@
 pub mod config;
 pub mod github;
 
-pub use config::ConfigError;
+pub use config::{ConfigError, ConfigIssue};
 pub use github::{GitHubError, NetworkErrorKind};
