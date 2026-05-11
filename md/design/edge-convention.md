@@ -12,7 +12,7 @@ Three GitHub-native relationships produce graph edges. All three are queryable a
 
 **Cross-reference** — a `CROSS_REFERENCED_EVENT` timeline item recording that issue A's body, comment, or PR description mentioned issue B with `#<number>` syntax. From `Issue.timelineItems(itemTypes: CROSS_REFERENCED_EVENT)`. Direction: mentioner → mentioned.
 
-Blocking and cross-reference data both live on the Issue, not on the project item, so they are fetched together by `github/issues.rs` (deferred to a later slice). Sub-issues come back inline with the items query (see [project-fetch.md](./project-fetch.md)).
+Blocking and cross-reference data both live on the Issue, not on the project item, so they are fetched together by `github/issues.rs` as a second pass after the items query (see [issue edges](./issue-edges.md)). Sub-issues come back inline with the items query (see [project fetching](./project-fetch.md)).
 
 ## Edge styles
 

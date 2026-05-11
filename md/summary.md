@@ -19,6 +19,8 @@
 - [Project fetching](./design/project-fetch.md)
 - [Node model](./design/node-model.md)
 - [Edge convention](./design/edge-convention.md)
+- [Issue edges](./design/issue-edges.md)
+- [Graph build](./design/graph-build.md)
 
 # Contribution guide
 
