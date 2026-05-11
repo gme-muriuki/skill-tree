@@ -2,9 +2,10 @@
 //!
 //! See `md/design/issue-edges.md` for the design.
 
-use crate::github::Connection;
+use crate::error::GitHubError;
 use crate::github::projects::{NodeList, RepositoryRef};
-use serde::Deserialize;
+use crate::github::{Connection, GitHubClient};
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // RawIssueEdges
@@ -88,6 +89,311 @@ pub enum CrossReferenceSource {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Label {
     pub name: String,
+}
+
+// ---------------------------------------------------------------------------
+// fetch_issue_edges
+// ---------------------------------------------------------------------------
+//
+// Two query documents back the second pass: a batched `nodes(ids:)` for
+// the inline first-50 pages, and two per-issue overflow queries used when
+// either inline connection reports `hasNextPage`. Splitting overflow into
+// two queries keeps each focused on one connection — an issue that
+// overflows only on trackedIssues does not pay for a wasted page on
+// timelineItems.
+
+const FETCH_ISSUE_EDGES_QUERY: &str = r#"
+    query FetchIssueEdges($ids: [ID!]!) {
+        nodes(ids: $ids) {
+            __typename
+            ... on Issue {
+                id
+                trackedIssues(first: 50) {
+                    nodes {
+                        id
+                        number
+                        repository { nameWithOwner }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+                timelineItems(itemTypes: CROSS_REFERENCED_EVENT, first: 50) {
+                    nodes {
+                        ... on CrossReferencedEvent {
+                            source {
+                                __typename
+                                ... on Issue {
+                                    id
+                                    number
+                                    repository { nameWithOwner }
+                                    labels(first: 20) { nodes { name } }
+                                }
+                                ... on PullRequest {
+                                    id
+                                    number
+                                    repository { nameWithOwner }
+                                    labels(first: 20) { nodes { name } }
+                                }
+                            }
+                        }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+        }
+    }
+"#;
+
+/// IDs per `nodes(ids:)` batch. GitHub's hard cap is 100.
+const IDS_PER_BATCH: usize = 100;
+
+/// Per-page size for overflow queries. GitHub caps `first` at 100.
+const OVERFLOW_PAGE: u32 = 100;
+
+#[derive(Serialize)]
+struct IssueEdgesVariables<'a> {
+    ids: &'a [&'a str],
+}
+
+#[derive(Debug, Deserialize)]
+struct FetchIssueEdgesResponse {
+    nodes: Vec<Option<RawIssueNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "__typename")]
+enum RawIssueNode {
+    Issue(IssueEdgeRecord),
+    /// A non-Issue node — should not occur given we only pass Issue IDs,
+    /// but kept for forward-compat. Dropped at the assembly step.
+    #[serde(other)]
+    Other,
+}
+
+/// Fetch blocking + cross-reference edge data for every Issue passed in.
+///
+/// Batches `issue_ids` at 100 per request via `nodes(ids:)`. Inline pages
+/// are first-50 on both `trackedIssues` and the cross-reference timeline;
+/// any issue whose inline connection reports `hasNextPage` is drained by
+/// per-issue overflow queries before this function returns. Non-Issue
+/// nodes and `null` entries (deleted between item fetch and this call)
+/// are silently skipped.
+///
+/// After the call, every `IssueEdgeRecord` in the returned `RawIssueEdges`
+/// has `tracked_issues.nodes` and `timeline_items.nodes` as complete
+/// lists with `page_info.has_next_page == false`. See
+/// `md/design/issue-edges.md`.
+pub async fn fetch_issue_edges(
+    client: &GitHubClient,
+    issue_ids: &[String],
+) -> Result<RawIssueEdges, GitHubError> {
+    let mut records: Vec<IssueEdgeRecord> = Vec::with_capacity(issue_ids.len());
+
+    for chunk in issue_ids.chunks(IDS_PER_BATCH) {
+        let ids: Vec<&str> = chunk.iter().map(String::as_str).collect();
+        let response: FetchIssueEdgesResponse = client
+            .query(FETCH_ISSUE_EDGES_QUERY, IssueEdgesVariables { ids: &ids })
+            .await?;
+        for node in response.nodes.into_iter().flatten() {
+            if let RawIssueNode::Issue(record) = node {
+                records.push(record);
+            }
+        }
+    }
+
+    resolve_overflow(client, &mut records).await?;
+
+    Ok(RawIssueEdges { issues: records })
+}
+
+// ---------------------------------------------------------------------------
+// Overflow
+// ---------------------------------------------------------------------------
+
+const FETCH_REMAINING_BLOCKING_QUERY: &str = r#"
+    query FetchRemainingBlocking($issueId: ID!, $first: Int!, $after: String!) {
+        node(id: $issueId) {
+            ... on Issue {
+                trackedIssues(first: $first, after: $after) {
+                    nodes {
+                        id
+                        number
+                        repository { nameWithOwner }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+        }
+    }
+"#;
+
+const FETCH_REMAINING_CROSS_REFS_QUERY: &str = r#"
+    query FetchRemainingCrossRefs($issueId: ID!, $first: Int!, $after: String!) {
+        node(id: $issueId) {
+            ... on Issue {
+                timelineItems(itemTypes: CROSS_REFERENCED_EVENT, first: $first, after: $after) {
+                    nodes {
+                        ... on CrossReferencedEvent {
+                            source {
+                                __typename
+                                ... on Issue {
+                                    id
+                                    number
+                                    repository { nameWithOwner }
+                                    labels(first: 20) { nodes { name } }
+                                }
+                                ... on PullRequest {
+                                    id
+                                    number
+                                    repository { nameWithOwner }
+                                    labels(first: 20) { nodes { name } }
+                                }
+                            }
+                        }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+        }
+    }
+"#;
+
+#[derive(Serialize)]
+struct OverflowVariables<'a> {
+    #[serde(rename = "issueId")]
+    issue_id: &'a str,
+    first: u32,
+    after: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct OverflowBlockingResponse {
+    node: Option<BlockingOverflowNode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockingOverflowNode {
+    tracked_issues: Connection<BlockingTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OverflowCrossRefsResponse {
+    node: Option<CrossRefsOverflowNode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CrossRefsOverflowNode {
+    timeline_items: Connection<CrossReferenceEvent>,
+}
+
+async fn resolve_overflow(
+    client: &GitHubClient,
+    records: &mut [IssueEdgeRecord],
+) -> Result<(), GitHubError> {
+    for record in records.iter_mut() {
+        if record.tracked_issues.page_info.has_next_page {
+            drain_blocking_overflow(client, record).await?;
+        }
+        if record.timeline_items.page_info.has_next_page {
+            drain_cross_refs_overflow(client, record).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn drain_blocking_overflow(
+    client: &GitHubClient,
+    record: &mut IssueEdgeRecord,
+) -> Result<(), GitHubError> {
+    let Some(initial_cursor) = record.tracked_issues.page_info.end_cursor.clone() else {
+        return Err(GitHubError::InvalidResponse(format!(
+            "issue '{}' inline trackedIssues claimed has_next_page but returned no end_cursor",
+            record.id
+        )));
+    };
+    let mut after = Some(initial_cursor);
+    while let Some(cursor) = after.take() {
+        let response: OverflowBlockingResponse = client
+            .query(
+                FETCH_REMAINING_BLOCKING_QUERY,
+                OverflowVariables {
+                    issue_id: &record.id,
+                    first: OVERFLOW_PAGE,
+                    after: &cursor,
+                },
+            )
+            .await?;
+        let node = response.node.ok_or_else(|| {
+            GitHubError::InvalidResponse(format!(
+                "trackedIssues overflow returned null node for issue '{}'",
+                record.id
+            ))
+        })?;
+        record
+            .tracked_issues
+            .nodes
+            .extend(node.tracked_issues.nodes);
+        if node.tracked_issues.page_info.has_next_page {
+            after = node.tracked_issues.page_info.end_cursor;
+            if after.is_none() {
+                return Err(GitHubError::InvalidResponse(
+                    "trackedIssues overflow claimed has_next_page but returned no end_cursor"
+                        .into(),
+                ));
+            }
+        }
+    }
+    record.tracked_issues.page_info.has_next_page = false;
+    record.tracked_issues.page_info.end_cursor = None;
+    Ok(())
+}
+
+async fn drain_cross_refs_overflow(
+    client: &GitHubClient,
+    record: &mut IssueEdgeRecord,
+) -> Result<(), GitHubError> {
+    let Some(initial_cursor) = record.timeline_items.page_info.end_cursor.clone() else {
+        return Err(GitHubError::InvalidResponse(format!(
+            "issue '{}' inline timelineItems claimed has_next_page but returned no end_cursor",
+            record.id
+        )));
+    };
+    let mut after = Some(initial_cursor);
+    while let Some(cursor) = after.take() {
+        let response: OverflowCrossRefsResponse = client
+            .query(
+                FETCH_REMAINING_CROSS_REFS_QUERY,
+                OverflowVariables {
+                    issue_id: &record.id,
+                    first: OVERFLOW_PAGE,
+                    after: &cursor,
+                },
+            )
+            .await?;
+        let node = response.node.ok_or_else(|| {
+            GitHubError::InvalidResponse(format!(
+                "timelineItems overflow returned null node for issue '{}'",
+                record.id
+            ))
+        })?;
+        record
+            .timeline_items
+            .nodes
+            .extend(node.timeline_items.nodes);
+        if node.timeline_items.page_info.has_next_page {
+            after = node.timeline_items.page_info.end_cursor;
+            if after.is_none() {
+                return Err(GitHubError::InvalidResponse(
+                    "timelineItems overflow claimed has_next_page but returned no end_cursor"
+                        .into(),
+                ));
+            }
+        }
+    }
+    record.timeline_items.page_info.has_next_page = false;
+    record.timeline_items.page_info.end_cursor = None;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
