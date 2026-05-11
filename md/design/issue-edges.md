@@ -85,9 +85,9 @@ pub struct RawIssueEdges {
 }
 
 pub struct IssueEdgeRecord {
-    pub id: String,                        // source issue's GitHub node id
-    pub blocking: Vec<BlockingTarget>,
-    pub cross_references: Vec<CrossReferenceEvent>,
+    pub id: String,                                       // source issue's GitHub node id
+    pub tracked_issues: Connection<BlockingTarget>,
+    pub timeline_items: Connection<CrossReferenceEvent>,
 }
 
 pub struct BlockingTarget {
@@ -105,16 +105,23 @@ pub enum CrossReferenceSource {
         id: String,
         number: u64,
         repository: RepositoryRef,
-        labels: Vec<String>,
+        labels: NodeList<Label>,
     },
     PullRequest {
         id: String,
         number: u64,
         repository: RepositoryRef,
-        labels: Vec<String>,
+        labels: NodeList<Label>,
     },
+    /// Forward-compat: any `__typename` the schema may introduce that
+    /// skill-tree does not model. The graph layer treats it as drop.
+    Unknown,
 }
+
+pub struct Label { pub name: String }
 ```
+
+After `fetch_issue_edges` returns, both inner connections on every record are drained: `nodes` carries the complete list and `page_info.has_next_page` is `false`. This mirrors the sub-issue overflow convention in [project fetching](./project-fetch.md) — the graph layer never sees pagination state.
 
 The fetch layer applies no policy: no membership filter, no self-edge rejection, no source-label matching. Everything GitHub returned is preserved verbatim. The graph layer decides what becomes an edge, what becomes a ghost node, and what to drop. See [graph build](./graph-build.md).
 
