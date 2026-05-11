@@ -1,6 +1,6 @@
 # Graph build
 
-The `graph/mod.rs` module turns a [`ProjectFetch`](./project-fetch.md) and a [`RawIssueEdges`](./issue-edges.md) into a typed graph of nodes and edges. It owns the `NodeId`, `Node`, `Edge`, `Graph`, `BuildError`, and `CycleReport` types and applies every policy from [node model](./node-model.md) and [edge convention](./edge-convention.md).
+The `graph/mod.rs` module turns a [`ProjectFetch`](./project-fetch.md) and a [`RawIssueEdges`](./issue-edges.md) into a typed graph of nodes and edges. It owns the `NodeId`, `Node`, `Edge`, and `Graph` types and applies every policy from [node model](./node-model.md) and [edge convention](./edge-convention.md). Error types (`BuildError`, `CycleReport`) live with the rest of the error hierarchy in `src/error/graph.rs`.
 
 ## Public entry points
 
