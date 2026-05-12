@@ -1,0 +1,9 @@
+---
+source: src/render/mod.rs
+expression: "to_dot(&g, &opts)"
+---
+digraph SkillTree {
+    rankdir = "LR";
+    "o/r#1" [label="#1: Done", shape=box, style=filled, fillcolor="#57a85a", URL="https://github.com/o/r/issues/1", tooltip="State: OPEN"];
+    "o/r#2" [label="#2: Unmapped", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/2", tooltip="State: OPEN"];
+}

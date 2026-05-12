@@ -1,0 +1,7 @@
+---
+source: src/render/mod.rs
+expression: "to_dot(&g, &opts())"
+---
+digraph SkillTree {
+    rankdir = "LR";
+}
