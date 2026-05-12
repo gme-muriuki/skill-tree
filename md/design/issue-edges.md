@@ -75,7 +75,7 @@ Either inline `first: 50` connection may report `hasNextPage: true`. `fetch_issu
 
 ## Inline source labels
 
-The cross-reference label filter — `[edges.cross-ref] require-label = "..."` — needs the source issue's labels. Rather than a third pass, labels are inlined on the `CrossReferencedEvent.source` selection, capped at 20 per source. The label set ships into graph construction with no extra round-trip; the filter is exact-name match.
+The cross-reference label filter — `[edges.cross-ref] require-labels = [...]` — needs the source issue's labels. Rather than a third pass, labels are inlined on the `CrossReferencedEvent.source` selection, capped at 20 per source. The label set ships into graph construction with no extra round-trip; the filter is exact-name match, any-of.
 
 ## Returned shape
 

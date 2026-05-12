@@ -64,9 +64,12 @@ pub enum ConfigIssue {
     /// Config references a SingleSelect option name that is not on the
     /// field's option list (typo, or the option was removed in GitHub).
     OptionNotFound {
+        /// Which TOML section listed the option (e.g. `"colors.values"`,
+        /// `"cluster.values"`).
+        section: &'static str,
         /// The field whose options were searched.
         field: String,
-        /// The value name from `[colors.values]`.
+        /// The value name from the TOML table.
         value: String,
     },
 }
@@ -87,9 +90,11 @@ impl fmt::Display for ConfigIssue {
                 f,
                 "[{section}] field {name:?} is type {actual}, expected {expected}"
             ),
-            ConfigIssue::OptionNotFound { field, value } => {
-                write!(f, "[colors.values] {value:?} is not an option of {field:?}")
-            }
+            ConfigIssue::OptionNotFound {
+                section,
+                field,
+                value,
+            } => write!(f, "[{section}] {value:?} is not an option of {field:?}"),
         }
     }
 }

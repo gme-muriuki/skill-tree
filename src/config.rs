@@ -31,6 +31,10 @@ pub struct Config {
     pub fields: Vec<FieldConfig>,
     #[serde(default)]
     pub colors: ColorsConfig,
+    #[serde(default)]
+    pub cluster: ClusterConfig,
+    #[serde(default)]
+    pub edges: EdgesConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -73,6 +77,39 @@ pub struct ColorsConfig {
     /// Nodes whose value is not in this map render with the default gray.
     #[serde(default)]
     pub values: HashMap<String, String>,
+}
+
+/// Groups nodes into Graphviz subgraphs by the value of a GitHub field.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct ClusterConfig {
+    /// Which GitHub field drives cluster membership.
+    #[serde(rename = "github-name", default)]
+    pub github_name: String,
+
+    /// Maps option names to friendly display labels for the cluster box.
+    ///
+    /// Unmapped options render with the raw option name.
+    #[serde(default)]
+    pub values: HashMap<String, String>,
+}
+
+/// Configures edge sources beyond sub-issues and blockers.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct EdgesConfig {
+    #[serde(rename = "cross-ref", default)]
+    pub cross_ref: CrossRefConfig,
+}
+
+/// Filters which GitHub cross-references become edges.
+///
+/// Cross-references are noisy by default (every `Fixes #123` mention).
+/// `require_labels` opts in: a cross-reference becomes an edge only if its
+/// source issue/PR carries at least one of the listed labels. An empty list
+/// (the default) drops every cross-reference.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct CrossRefConfig {
+    #[serde(rename = "require-labels", default)]
+    pub require_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,32 +205,23 @@ impl Config {
     pub fn validate_against(&self, meta: &ProjectMeta) -> Result<(), Vec<ConfigIssue>> {
         let mut issues = Vec::new();
 
-        if !self.colors.github_name.is_empty() {
-            match meta.field_by_name(&self.colors.github_name) {
-                None => issues.push(ConfigIssue::FieldNotFound {
-                    section: "colors",
-                    name: self.colors.github_name.clone(),
-                }),
-                Some(field) => match &field.kind {
-                    FieldKind::SingleSelect { options } => {
-                        for value_name in self.colors.values.keys() {
-                            if !options.iter().any(|o| &o.name == value_name) {
-                                issues.push(ConfigIssue::OptionNotFound {
-                                    field: self.colors.github_name.clone(),
-                                    value: value_name.clone(),
-                                });
-                            }
-                        }
-                    }
-                    other => issues.push(ConfigIssue::FieldWrongType {
-                        section: "colors",
-                        name: self.colors.github_name.clone(),
-                        expected: "SingleSelect",
-                        actual: field_kind_name(other),
-                    }),
-                },
-            }
-        }
+        check_single_select_field(
+            "colors",
+            "colors.values",
+            &self.colors.github_name,
+            self.colors.values.keys(),
+            meta,
+            &mut issues,
+        );
+
+        check_single_select_field(
+            "cluster",
+            "cluster.values",
+            &self.cluster.github_name,
+            self.cluster.values.keys(),
+            meta,
+            &mut issues,
+        );
 
         for field_config in &self.fields {
             if meta.field_by_name(&field_config.github_name).is_none() {
@@ -209,6 +237,47 @@ impl Config {
         } else {
             Err(issues)
         }
+    }
+}
+
+/// Records issues for a config section that points at a SingleSelect field
+/// and lists option names under it (`colors`, `cluster`). Empty `field_name`
+/// means the section is unset — skip.
+fn check_single_select_field<'a>(
+    section: &'static str,
+    values_section: &'static str,
+    field_name: &str,
+    option_keys: impl Iterator<Item = &'a String>,
+    meta: &ProjectMeta,
+    issues: &mut Vec<ConfigIssue>,
+) {
+    if field_name.is_empty() {
+        return;
+    }
+    match meta.field_by_name(field_name) {
+        None => issues.push(ConfigIssue::FieldNotFound {
+            section,
+            name: field_name.to_owned(),
+        }),
+        Some(field) => match &field.kind {
+            FieldKind::SingleSelect { options } => {
+                for key in option_keys {
+                    if !options.iter().any(|o| &o.name == key) {
+                        issues.push(ConfigIssue::OptionNotFound {
+                            section: values_section,
+                            field: field_name.to_owned(),
+                            value: key.clone(),
+                        });
+                    }
+                }
+            }
+            other => issues.push(ConfigIssue::FieldWrongType {
+                section,
+                name: field_name.to_owned(),
+                expected: "SingleSelect",
+                actual: field_kind_name(other),
+            }),
+        },
     }
 }
 
@@ -564,6 +633,142 @@ mod tests {
         // (the colors.values entry is skipped because the field lookup
         // already failed — it would otherwise be a third issue).
         assert_eq!(issues.len(), 2);
+    }
+
+    // -- cluster + edges parsing --
+
+    #[test]
+    fn parses_cluster_section() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [cluster]
+            github-name = \"Area\"
+
+            [cluster.values]
+            \"compiler-frontend\" = \"Frontend\"
+            \"compiler-mir\"      = \"MIR\"
+        "});
+        assert_eq!(config.cluster.github_name, "Area");
+        assert_eq!(
+            config
+                .cluster
+                .values
+                .get("compiler-frontend")
+                .map(String::as_str),
+            Some("Frontend"),
+        );
+        assert_eq!(config.cluster.values.len(), 2);
+    }
+
+    #[test]
+    fn parses_edges_cross_ref_section() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [edges.cross-ref]
+            require-labels = [\"tracking-issue\", \"meta\"]
+        "});
+        assert_eq!(
+            config.edges.cross_ref.require_labels,
+            vec!["tracking-issue", "meta"],
+        );
+    }
+
+    #[test]
+    fn cluster_and_edges_default_when_absent() {
+        let config = parse(minimal_toml());
+        assert!(config.cluster.github_name.is_empty());
+        assert!(config.cluster.values.is_empty());
+        assert!(config.edges.cross_ref.require_labels.is_empty());
+    }
+
+    // -- validate_against cluster --
+
+    #[test]
+    fn validate_against_passes_when_cluster_field_matches() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [cluster]
+            github-name = \"Status\"
+
+            [cluster.values]
+            \"Done\"        = \"Done\"
+            \"In Progress\" = \"Active\"
+        "});
+        assert!(config.validate_against(&meta_with_status_field()).is_ok());
+    }
+
+    #[test]
+    fn validate_against_collects_cluster_field_not_found() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [cluster]
+            github-name = \"Aera\"
+        "});
+        let issues = config
+            .validate_against(&meta_with_status_field())
+            .unwrap_err();
+        assert!(matches!(
+            &issues[0],
+            ConfigIssue::FieldNotFound { section, name }
+                if *section == "cluster" && name == "Aera"
+        ));
+    }
+
+    #[test]
+    fn validate_against_collects_cluster_field_wrong_type() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [cluster]
+            github-name = \"Priority\"
+        "});
+        let issues = config
+            .validate_against(&meta_with_status_field())
+            .unwrap_err();
+        assert!(matches!(
+            &issues[0],
+            ConfigIssue::FieldWrongType { section, name, .. }
+                if *section == "cluster" && name == "Priority"
+        ));
+    }
+
+    #[test]
+    fn validate_against_flags_unknown_cluster_option_values() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [cluster]
+            github-name = \"Status\"
+
+            [cluster.values]
+            \"Done\"     = \"Done\"
+            \"Bogus\"    = \"x\"
+        "});
+        let issues = config
+            .validate_against(&meta_with_status_field())
+            .unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(
+            &issues[0],
+            ConfigIssue::OptionNotFound { section, value, .. }
+                if *section == "cluster.values" && value == "Bogus"
+        ));
     }
 
     #[test]
