@@ -1,0 +1,11 @@
+---
+source: src/render/mod.rs
+expression: "to_dot(&g, &opts())"
+---
+digraph SkillTree {
+    rankdir = "LR";
+    "ext/lib#99" [label="ext/lib#99", shape=box, style=dashed, URL="https://github.com/ext/lib/issues/99"];
+    "o/r#1" [label="#1: Issue", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/1", tooltip="State: OPEN"];
+    "DI_a" [label="Draft", shape=note, style=filled, fillcolor="#dddddd"];
+    "PVTI_x" [label="[redacted]", shape=box, style="dashed,filled", fillcolor="#dddddd"];
+}
