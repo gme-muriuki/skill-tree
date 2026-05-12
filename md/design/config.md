@@ -21,6 +21,16 @@ github-name = "Status"
 "Blocked"     = "#e05252"
 "Complete"    = "#57a85a"
 "Not Started" = "#888888"
+
+[cluster]
+github-name = "Area"
+
+[cluster.values]
+"compiler-frontend" = "Frontend"
+"compiler-mir"      = "MIR"
+
+[edges.cross-ref]
+require-labels = ["tracking-issue", "meta"]
 ```
 
 ## Sections
@@ -38,6 +48,14 @@ Gives a GitHub Projects custom field a friendly display name for CLI output. `di
 Controls node color in the rendered graph. Optional. `github-name` selects which GitHub field drives color. `values` maps that field's option names to hex colors (`#rgb` or `#rrggbb`, leading `#` required).
 
 `github-name` does not need a corresponding `[[field]]` entry — it refers directly to the GitHub field name. Keys in `[colors.values]` must match GitHub's option names exactly, including case and spacing. Nodes whose value is not in the map render with the default gray (`#dddddd`).
+
+### `[cluster]`
+
+Groups nodes into Graphviz subgraphs by the value of a GitHub SingleSelect field. Optional. `github-name` selects the field; `values` maps option names to friendly display labels for the cluster box. Unmapped options render with the raw option name. The field must be SingleSelect; mismatches surface during validation against project metadata.
+
+### `[edges.cross-ref]`
+
+Configures which GitHub cross-references become graph edges. `require-labels` is a list of label names. A cross-reference renders only if its source carries at least one listed label (exact-name, any-of). The default is the empty list — every cross-reference drops. Cross-refs are noisy by nature; users opt in by listing the labels that mark "this mention is a real dependency".
 
 ## Field auto-discovery
 

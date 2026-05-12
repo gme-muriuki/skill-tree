@@ -232,6 +232,7 @@ mod tests {
                     name: "Statu".into(),
                 },
                 ConfigIssue::OptionNotFound {
+                    section: "colors.values",
                     field: "Status".into(),
                     value: "Don done".into(),
                 },

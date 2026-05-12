@@ -29,7 +29,7 @@ Every PR that mentions an issue creates a `CROSS_REFERENCED_EVENT`. Without filt
 
 **Both endpoints must be on the project board.** Cross-references to issues outside the project drop silently. Always on; not configurable.
 
-**Source-issue label filter (optional).** When `[edges.cross-ref] require-label = "<name>"` is set, only cross-references whose source issue carries `<name>` render. Use this when the default cross-reference set is too noisy. Default: no label filter; every on-project cross-reference renders.
+**Source-issue label filter (restrictive default).** `[edges.cross-ref] require-labels` is a list of label names. A cross-reference renders only if its source carries at least one listed label (exact-name match, any-of). The default is the empty list, which drops every cross-reference — cross-refs are opt-in, since on a real GitHub board they are dominated by chat and PR noise.
 
 ## Edge identity
 
