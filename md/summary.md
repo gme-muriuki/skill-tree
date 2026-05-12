@@ -21,6 +21,7 @@
 - [Edge convention](./design/edge-convention.md)
 - [Issue edges](./design/issue-edges.md)
 - [Graph build](./design/graph-build.md)
+- [Render](./design/render.md)
 
 # Contribution guide
 
