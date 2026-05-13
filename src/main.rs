@@ -1,12 +1,18 @@
-//! skill-tree binary entry point.
-//! Parses CLI arguments and dispatches to render, unblocked, or validate.
+//! skill-tree binary entry point. Parses CLI arguments and dispatches.
 
-use skill_tree::config::SkillTree;
+use std::process::ExitCode;
 
-fn main() {
-    println!("Hello world!");
+use clap::Parser as _;
+use skill_tree::cli::{Cli, dispatch};
 
-    let config = SkillTree::from_dir(".").unwrap();
-
-    println!("{:#?}", config);
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match dispatch(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(e.exit_code())
+        }
+    }
 }

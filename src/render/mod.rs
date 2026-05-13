@@ -5,12 +5,19 @@
 //! (`constraint=false` on cross-references, `style=rounded` clusters
 //! with no fill), and the deterministic output guarantee.
 
+mod svg;
+
+pub use svg::dot_to_svg;
+
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
-const DEFAULT_COLOR: &str = "#dddddd";
+/// Fallback fill color when a node has no status, the status is not in
+/// `[colors.values]`, or `RenderOpts.default_color` is empty. Reused by
+/// `cli::render` so the CLI and renderer agree on one chrome tone.
+pub const DEFAULT_COLOR: &str = "#dddddd";
 const BODY_TOOLTIP_LIMIT: usize = 200;
 
 /// Render-time options derived from [`crate::config::Config`] plus CLI

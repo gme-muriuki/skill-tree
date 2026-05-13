@@ -34,6 +34,21 @@ pub enum ConfigError {
         /// The invalid color value.
         value: String,
     },
+
+    /// `.skill-tree.toml` was not found in `start` nor any parent directory.
+    /// Surfaced only by [`crate::config::SkillTree::discover`] — explicit
+    /// `--config PATH` takes a different path that fails with `Io` instead.
+    #[error("no .skill-tree.toml found in {start} or any parent directory")]
+    NotFound {
+        /// The directory the walk started from (typically CWD).
+        start: PathBuf,
+    },
+
+    /// `std::env::current_dir()` failed — the CWD was deleted or is
+    /// unreadable. Surfaced only by [`crate::config::SkillTree::discover`]
+    /// when invoked without an explicit `--config` path.
+    #[error("could not read current directory: {0}")]
+    CwdUnreadable(#[source] std::io::Error),
 }
 
 /// One concrete way `.skill-tree.toml` disagrees with the project metadata

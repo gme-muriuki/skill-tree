@@ -115,7 +115,29 @@ skill-tree render --config /path/to/.skill-tree.toml
 - `--output X.svg` → format inferred as SVG.
 - `--output X.dot` → format inferred as DOT.
 
+**Format resolution is permissive.** Explicit `--format` always wins (writing SVG bytes to a `.dot` filename is allowed — the user knows). Unknown or missing extensions fall back to DOT. No TTY detection on stdout — consistent with `dot -Tsvg` itself. Strict validation would force users to think about cases that don't matter to them.
+
+**Config discovery vs. explicit path.** `SkillTree::discover(cwd)` walks `cwd.ancestors()` looking for `.skill-tree.toml` and surfaces `ConfigError::NotFound { start }` if nothing matches. `--config PATH` takes a different code path (`SkillTree::from_path`) that fails fast on a missing file with `ConfigError::Io` rather than falling back to discovery — explicit user intent should not silently search elsewhere.
+
 `--transitive-reduce` is a slice 4 addition, riding on petgraph adoption.
+
+## Orchestration
+
+The full pipeline lives in `src/cli/render.rs`:
+
+1. Load config — `SkillTree::from_path` if `--config` was passed; otherwise `SkillTree::discover(cwd)`.
+2. Construct `GitHubClient::new(None, Duration::from_secs(60))` — token from `GITHUB_TOKEN`, 60s timeout. Token and timeout are intentionally not configurable (YAGNI; users already have `GITHUB_TOKEN` set for `gh`/`git`).
+3. `fetch_project(&client, &config)` — metadata + items + sub-issue overflow.
+4. Extract Issue/PullRequest IDs from project items.
+5. `fetch_issue_edges(&client, &ids)` — blocking + cross-reference timeline.
+6. `Graph::from_fetch(project, edges, &config)?`.
+7. `graph.validate()?`.
+8. Build `RenderOpts` from `config.colors.values`, `config.cluster.values`, and a hardcoded default color.
+9. `to_dot(&graph, &opts)` (always).
+10. If format is SVG, `dot_to_svg(&dot)?`; otherwise the DOT bytes are the output.
+11. Write to `--output` PATH (`std::fs::write`) or stdout (locked handle). IO errors at this step surface as `CliError::OutputWrite { path, source }` with exit 1.
+
+`render_to_bytes(client, config, args)` is public so integration tests can wire a mock-pointed `GitHubClient` and a `Config` parsed from a TOML string. The CLI binary itself only goes through `run(args)`, which adds the config-loading and output-writing layers.
 
 ## SVG pipeline
 
@@ -141,12 +163,16 @@ Reasons for shelling out (rather than linking libgraphviz or using a pure-Rust D
 pub enum RenderError {
     #[error("`dot` binary not found in PATH — install graphviz from https://graphviz.org/download/")]
     DotNotFound,
+    #[error("failed to launch `dot`: {0}")]
+    DotSpawn(#[source] std::io::Error),
     #[error("`dot` exited with status {status}: {stderr}")]
     DotFailed { status: i32, stderr: String },
 }
 ```
 
-Both variants exit with code `1` (unrenderable output — same category as missing data).
+`DotNotFound` carries an actionable install pointer; `DotSpawn` covers non-NotFound spawn failures and broken pipes on `dot`'s stdin; `DotFailed` carries the captured stderr. All three exit with code `1`.
+
+CLI dispatch wraps these (and `ConfigError`, `GitHubError`, `BuildError`, `CycleReport`) in a top-level `CliError` envelope in `src/error/cli.rs`. `CliError::exit_code()` defers to the wrapped error so the existing 1 / 3 / 4 conventions are preserved across subcommands. Output-write failures split by destination: `CliError::FileWrite { path, source }` and `CliError::StdoutWrite(source)`, both exit 1. The split avoids using a sentinel `PathBuf` for stdout.
 
 ## Testing
 

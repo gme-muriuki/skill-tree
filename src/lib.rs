@@ -19,6 +19,7 @@
 //! - [`render`]  — turns a [`graph`] into Graphviz DOT / SVG
 //!
 
+pub mod cli;
 pub mod config;
 pub mod error;
 pub mod github;

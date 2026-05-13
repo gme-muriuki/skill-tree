@@ -13,8 +13,8 @@ use std::fmt;
 /// Error returned by the GitHub GraphQL client.
 #[derive(Debug, thiserror::Error)]
 pub enum GitHubError {
-    /// No token found in --token flag or GITHUB_TOKEN environment variable.
-    #[error("no GitHub token found. Set GITHUB_TOKEN or use --token flag")]
+    /// No token found in the GITHUB_TOKEN environment variable.
+    #[error("no GitHub token found — set GITHUB_TOKEN in your environment")]
     MissingToken,
 
     /// HTTP client could not be constructed (TLS backend, proxy config, etc.).

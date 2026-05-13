@@ -14,6 +14,12 @@ pub enum RenderError {
     )]
     DotNotFound,
 
+    /// Spawning `dot` or piping DOT to its stdin failed for a reason
+    /// other than the binary being absent (permission denied, broken
+    /// pipe, etc).
+    #[error("failed to launch `dot`: {0}")]
+    DotSpawn(#[source] std::io::Error),
+
     /// `dot` exited non-zero. The captured stderr is included verbatim.
     #[error("`dot` exited with status {status}: {stderr}")]
     DotFailed { status: i32, stderr: String },

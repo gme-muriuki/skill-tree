@@ -133,6 +133,22 @@ impl SkillTree {
         Self::from_path(dir.join(Self::CONFIG_FILENAME))
     }
 
+    /// Walk up from `start` looking for `.skill-tree.toml`. Returns the
+    /// first match. The default entry point for `skill-tree render` when
+    /// the user has not passed `--config`.
+    pub fn discover(start: impl AsRef<Path>) -> Fallible<Self> {
+        let start = start.as_ref();
+        for dir in start.ancestors() {
+            let candidate = dir.join(Self::CONFIG_FILENAME);
+            if candidate.is_file() {
+                return Self::from_path(candidate);
+            }
+        }
+        Err(ConfigError::NotFound {
+            start: start.to_path_buf(),
+        })
+    }
+
     /// Load config from an explicit file path.
     pub fn from_path(path: impl AsRef<Path>) -> Fallible<Self> {
         let path = path.as_ref();
