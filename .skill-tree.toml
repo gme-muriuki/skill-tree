@@ -1,24 +1,3 @@
 [github]
 owner   = "rust-lang"
-project = 42
-
-[[field]]
-display-name = "status"
-github-name  = "Status"
-
-[[field]]
-display-name = "priority"
-github-name  = "Priority"
-
-[[field]]
-display-name = "assignee"
-github-name  = "Assignee"
-
-[colors]
-github-name = "Status"
-
-[colors.values]
-"In Progress" = "#4a90d9"
-"Blocked"     = "#e05252"
-"Complete"    = "#57a85a"
-"Not Started" = "#888888"
+project = 62

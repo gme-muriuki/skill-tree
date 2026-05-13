@@ -281,6 +281,12 @@ fn emit_edge(out: &mut String, edge: &Edge) {
 /// two characters DOT cares about (`\\` and `"`), plus newline
 /// (encoded as the literal two-character escape `\n`, which Graphviz
 /// renders as a line break inside `tooltip` and `label` values).
+///
+/// ASCII control characters below 0x20 (except tab) are dropped: GitHub
+/// issue bodies sometimes contain ANSI escape sequences from copied
+/// compiler output (`\x1B[31m...\x1B[0m`), and those bytes survive
+/// through `dot -Tsvg` into XML attribute values where they are
+/// rejected by XML 1.0. We also drop 0x7F (DEL) for the same reason.
 fn quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -289,6 +295,8 @@ fn quote(s: &str) -> String {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
+            c if (c as u32) < 0x20 && c != '\t' => {}
+            '\u{7F}' => {}
             other => out.push(other),
         }
     }
@@ -626,6 +634,18 @@ mod tests {
         assert_eq!(quote(r#"has "quotes""#), r#""has \"quotes\"""#);
         assert_eq!(quote(r"back\slash"), r#""back\\slash""#);
         assert_eq!(quote("line1\nline2"), r#""line1\nline2""#);
+    }
+
+    #[test]
+    fn quote_drops_ascii_control_chars_that_break_xml() {
+        // ANSI escape (`\x1B[31m`...`\x1B[0m`) commonly appears in pasted
+        // compiler-output issue bodies. The bare ESC byte is invalid in
+        // XML 1.0 attribute values, so `dot -Tsvg` would emit broken
+        // SVG. Drop control chars below 0x20 (keep tab) plus DEL.
+        assert_eq!(quote("\x1B[31mICE\x1B[0m"), r#""[31mICE[0m""#);
+        assert_eq!(quote("a\x00b\x07c\x7Fd"), r#""abcd""#);
+        // Tab is XML-valid and worth preserving.
+        assert_eq!(quote("a\tb"), "\"a\tb\"");
     }
 
     #[test]
