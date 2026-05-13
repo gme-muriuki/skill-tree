@@ -30,7 +30,22 @@ Required scopes: `read:project` for GitHub Projects V2, and `repo` for issue con
 
 ## Transport
 
-`reqwest` for HTTP, `tokio` for async runtime. Each `query()` call serializes variables to JSON, POSTs to `https://api.github.com/graphql` with the `Authorization` header, parses the response body, checks HTTP status, checks for `errors` in the body, and returns `data` on success. The timeout applies to the entire request including retry backoff.
+`reqwest` for HTTP, `tokio` for async runtime. Each `query()` call serializes variables to JSON, POSTs to `https://api.github.com/graphql` with the `Authorization` header, parses the response body, checks HTTP status, applies the GraphQL partial-success rule (below), and returns `data` on success. The timeout applies to the entire request including retry backoff.
+
+### GraphQL partial-success
+
+GitHub commonly returns both `data` and `errors` in the same response. The dual-probe metadata pattern is the canonical case: `organization(login: $owner)` and `user(login: $owner)` are queried in one document, and the failing branch becomes an entry in `errors` while the succeeding branch fills in `data`.
+
+The transport handles this by **preferring `data` over `errors`**:
+
+| `data`     | `errors`        | Outcome                                 |
+|------------|-----------------|-----------------------------------------|
+| present    | absent or empty | `Ok(data)`                              |
+| present    | non-empty       | `Ok(data)` — path-level errors discarded |
+| null       | non-empty       | `Err(GraphQLError(...))`                |
+| null       | absent or empty | `Err(InvalidResponse(...))`             |
+
+Callers that need finer-grained error inspection should validate the deserialized data themselves (e.g., `fetch_project_meta` checks both `organization` and `user` branches and decides which side resolved).
 
 ## Retry
 

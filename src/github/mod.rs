@@ -254,23 +254,29 @@ impl GitHubClient {
             .await
             .map_err(Self::classify_reqwest_error)?;
 
-        // GitHub's GraphQL spec says `errors` must contain at least one entry
-        // when present. Treat an empty array the same as no errors so we don't
-        // surface a useless `GraphQLError("")`.
-        if let Some(errors) = body.errors.filter(|e| !e.is_empty()) {
-            let message = errors
-                .into_iter()
-                .map(|e| e.message)
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(GitHubError::GraphQLError(message));
+        // GraphQL partial-success: GitHub commonly returns both `data` and
+        // `errors` in the same response — for example, the metadata query
+        // probes both `organization(login: $owner)` and `user(login: $owner)`,
+        // and the failing branch shows up as an entry in `errors` while the
+        // succeeding branch returns valid data. When `data` is present, return
+        // it and discard the path-level errors; only surface
+        // `GraphQLError` when `data` is null and `errors` is non-empty.
+        match body.data {
+            Some(data) => Ok(data),
+            None => match body.errors.filter(|e| !e.is_empty()) {
+                Some(errors) => {
+                    let message = errors
+                        .into_iter()
+                        .map(|e| e.message)
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    Err(GitHubError::GraphQLError(message))
+                }
+                None => Err(GitHubError::InvalidResponse(
+                    "GraphQL response had neither `data` nor `errors`".to_string(),
+                )),
+            },
         }
-
-        body.data.ok_or_else(|| {
-            GitHubError::InvalidResponse(
-                "GraphQL response had neither `data` nor `errors`".to_string(),
-            )
-        })
     }
 
     /// Classify a reqwest error. JSON decode failures are reported as

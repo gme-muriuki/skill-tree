@@ -78,6 +78,17 @@ impl MockGitHub {
             })))
     }
 
+    /// 200 response carrying both `data` and `errors` — the GraphQL
+    /// partial-success shape. The transport returns `data` and discards
+    /// the errors.
+    pub fn ok_data_with_errors(&self, body: Value, error_message: &str) -> MockHandle {
+        self.matcher()
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": body,
+                "errors": [{ "message": error_message }],
+            })))
+    }
+
     /// 200 response with neither `data` nor `errors` — exercises
     /// `GitHubError::InvalidResponse`.
     pub fn empty_envelope(&self) -> MockHandle {

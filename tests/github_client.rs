@@ -122,6 +122,33 @@ async fn graphql_errors_are_returned_without_retry() {
 }
 
 #[tokio::test]
+async fn partial_success_returns_data_and_discards_errors() {
+    // GitHub returns `data` and `errors` together for the dual-probe
+    // metadata pattern (org branch resolves, user branch errors). The
+    // transport should surface `data` and drop the path-level error.
+    let gh = MockGitHub::start().await;
+    gh.ok_data_with_errors(
+        json!({ "hello": "world" }),
+        "Could not resolve to a User with the login of 'rust-lang'",
+    )
+    .expect(1)
+    .mount(&gh.server)
+    .await;
+
+    let client = gh.client(Duration::from_secs(10));
+    let resp: Hello = client
+        .query("query Q { hello }", EmptyVars {})
+        .await
+        .expect("partial success: data wins over path-level errors");
+    assert_eq!(
+        resp,
+        Hello {
+            hello: "world".into()
+        }
+    );
+}
+
+#[tokio::test]
 async fn invalid_response_when_envelope_has_neither_data_nor_errors() {
     let gh = MockGitHub::start().await;
     gh.empty_envelope()
