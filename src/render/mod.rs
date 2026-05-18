@@ -13,7 +13,7 @@ pub use svg::dot_to_svg;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
-use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
+use crate::graph::{Edge, EdgeKind, Graph, Node, NodeId, NodeKind};
 
 use self::body::{BODY_TOOLTIP_LIMIT, clean_body};
 use self::label::format_label;
@@ -144,10 +144,9 @@ fontsize=11, margin=\"0.18,0.08\", penwidth=1.5];"
     }
 
     // Data edges (sub-issue, blocks, cross-ref) all carry
-    // constraint=false so the tree spine wins layout.
-    for edge in &graph.edges {
-        emit_edge(&mut out, edge);
-    }
+    // constraint=false so the tree spine wins layout. Cross-refs are
+    // deduped per unordered pair; symmetric pairs emit with dir=both.
+    emit_data_edges(&mut out, &graph.edges);
 
     writeln!(out, "}}").unwrap();
     out
@@ -312,50 +311,81 @@ fn emit_tree_edge(out: &mut String, src: &str, tgt: &str) {
     writeln!(out, "    {} -> {};", quote(src), quote(tgt)).unwrap();
 }
 
-/// One DOT line for a data edge. All data edges (sub-issue, blocks,
-/// cross-ref) carry `constraint=false` so the tree spine drives the
-/// layout. Edge kind is signalled by style — solid for sub-issue and
-/// blocking, dashed for cross-reference.
-///
-/// Cross-reference edges additionally get a per-source color from a
-/// 10-hue qualitative palette and a thinner stroke (`penwidth=0.7`),
-/// so a dense board with many cross-refs stays traceable: edges
-/// leaving the same source share a hue, the lighter weight makes them
-/// recede behind the tree spine, and the enriched tooltip names the
-/// two endpoints.
-fn emit_edge(out: &mut String, edge: &Edge) {
+/// Emit every data edge with `constraint=false` so the tree spine
+/// drives layout. Sub-issue and blocking pass through one-to-one.
+/// Cross-references dedupe per unordered pair: a symmetric pair
+/// (A↔B) emits once with `dir=both`, preserving the mutual-mention
+/// semantic without doubling the visual clutter.
+fn emit_data_edges(out: &mut String, edges: &[Edge]) {
+    use std::collections::HashSet;
+
+    let cross_ref_dirs: HashSet<(&NodeId, &NodeId)> = edges
+        .iter()
+        .filter(|e| matches!(e.kind, EdgeKind::CrossReference))
+        .map(|e| (&e.source, &e.target))
+        .collect();
+    let mut emitted_pairs: HashSet<(&NodeId, &NodeId)> = HashSet::new();
+
+    for edge in edges {
+        match edge.kind {
+            EdgeKind::SubIssue | EdgeKind::Blocks => emit_solid_edge(out, edge),
+            EdgeKind::CrossReference => {
+                let (lo, hi) = if edge.source <= edge.target {
+                    (&edge.source, &edge.target)
+                } else {
+                    (&edge.target, &edge.source)
+                };
+                if !emitted_pairs.insert((lo, hi)) {
+                    continue;
+                }
+                let symmetric = cross_ref_dirs.contains(&(hi, lo));
+                emit_cross_ref_edge(out, lo, hi, symmetric);
+            }
+        }
+    }
+}
+
+fn emit_solid_edge(out: &mut String, edge: &Edge) {
     let source_str = edge.source.to_string();
     let target_str = edge.target.to_string();
-    let src = quote(&source_str);
-    let tgt = quote(&target_str);
-    write!(out, "    {src} -> {tgt} [").unwrap();
     let kind_name = match edge.kind {
         EdgeKind::SubIssue => "sub-issue",
         EdgeKind::Blocks => "blocks",
-        EdgeKind::CrossReference => "cross-reference",
+        EdgeKind::CrossReference => unreachable!("cross-refs go through emit_cross_ref_edge"),
     };
     let tooltip = format!("{kind_name}: {source_str} → {target_str}");
-    match edge.kind {
-        EdgeKind::SubIssue | EdgeKind::Blocks => {
-            write!(
-                out,
-                "style=solid, constraint=false, tooltip={}",
-                quote(&tooltip)
-            )
-            .unwrap();
-        }
-        EdgeKind::CrossReference => {
-            let color = cross_ref_color(&source_str);
-            write!(
-                out,
-                "style=dashed, constraint=false, penwidth=0.7, color={}, tooltip={}",
-                quote(color),
-                quote(&tooltip)
-            )
-            .unwrap();
-        }
-    }
-    writeln!(out, "];").unwrap();
+    writeln!(
+        out,
+        "    {} -> {} [style=solid, constraint=false, tooltip={}];",
+        quote(&source_str),
+        quote(&target_str),
+        quote(&tooltip),
+    )
+    .unwrap();
+}
+
+fn emit_cross_ref_edge(out: &mut String, source: &NodeId, target: &NodeId, symmetric: bool) {
+    let source_str = source.to_string();
+    let target_str = target.to_string();
+    let color = cross_ref_color(&source_str);
+    let (tooltip, dir_attr) = if symmetric {
+        (
+            format!("cross-reference (mutual): {source_str} ↔ {target_str}"),
+            ", dir=both",
+        )
+    } else {
+        (format!("cross-reference: {source_str} → {target_str}"), "")
+    };
+    writeln!(
+        out,
+        "    {} -> {} [style=dashed, constraint=false, penwidth=0.7{}, color={}, tooltip={}];",
+        quote(&source_str),
+        quote(&target_str),
+        dir_attr,
+        quote(color),
+        quote(&tooltip),
+    )
+    .unwrap();
 }
 
 /// Escape a Rust string for use inside DOT double-quotes. Handles `"`
@@ -687,6 +717,47 @@ mod tests {
             out.contains(", color=\"#"),
             "cross-reference edge missing color hex: {out}"
         );
+    }
+
+    #[test]
+    fn symmetric_cross_refs_render_once_with_dir_both() {
+        let nodes = vec![issue_node("o", "r", 1, "A"), issue_node("o", "r", 2, "B")];
+        let edges = vec![
+            edge(
+                EdgeKind::CrossReference,
+                issue_id("o", "r", 1),
+                issue_id("o", "r", 2),
+            ),
+            edge(
+                EdgeKind::CrossReference,
+                issue_id("o", "r", 2),
+                issue_id("o", "r", 1),
+            ),
+        ];
+        let g = Graph { nodes, edges };
+        let out = to_dot(&g, &opts());
+        // Exactly one dashed edge, with dir=both.
+        assert_eq!(
+            out.matches("style=dashed").count(),
+            1,
+            "symmetric cross-refs should collapse to one dashed edge: {out}"
+        );
+        assert!(out.contains("dir=both"));
+        assert!(out.contains("cross-reference (mutual): o/r#1 ↔ o/r#2"));
+    }
+
+    #[test]
+    fn asymmetric_cross_ref_does_not_carry_dir_both() {
+        let nodes = vec![issue_node("o", "r", 1, "A"), issue_node("o", "r", 2, "B")];
+        let edges = vec![edge(
+            EdgeKind::CrossReference,
+            issue_id("o", "r", 1),
+            issue_id("o", "r", 2),
+        )];
+        let g = Graph { nodes, edges };
+        let out = to_dot(&g, &opts());
+        assert!(!out.contains("dir=both"));
+        assert!(out.contains("cross-reference: o/r#1 → o/r#2"));
     }
 
     #[test]

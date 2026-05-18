@@ -73,6 +73,8 @@ The rendered DOT is a forest with one root: the project. Issues are leaves; clus
 
 **Cross-reference color hashing.** Cross-refs converge and diverge in the middle of dense boards; a single black-dashed style makes them impossible to trace. Each cross-ref takes a color from a fixed 10-hue qualitative palette (Tableau-10 inspired), keyed off the source `NodeId.to_string()`. Same source → same color across runs and across that source's outgoing cross-refs, so following "what does #265 reference" is a one-color trace. The thinner `penwidth=0.7` makes the cross-ref network recede visually behind the tree spine.
 
+**Symmetric cross-reference dedup.** Bidirectional cross-refs (A mentions #B and B mentions #A) are common on real boards. Render collapses each unordered pair to a single edge; when the reverse also exists, the edge emits with `dir=both` so the mutual-mention semantic shows up as arrowheads on both ends instead of two overlapping dashed lines. Canonical direction for the emitted edge is the lower `NodeId` as source, so output is deterministic regardless of which direction the GitHub timeline returned first.
+
 **Labels.** None inline. Edge kind is implied by style; adding text labels per edge adds noise on dense boards.
 
 **Tooltips.** `tooltip="<kind>: <source> → <target>"` per data edge — e.g. `"cross-reference: o/r#265 → o/r#267"`. The enriched form lets a viewer hover an edge and read its endpoints without tracing the line through the graph. Tree edges carry no tooltip — the relationship they encode (membership in a cluster, membership in the project) is already obvious from the structure.
