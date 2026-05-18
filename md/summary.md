@@ -22,6 +22,7 @@
 - [Issue edges](./design/issue-edges.md)
 - [Graph build](./design/graph-build.md)
 - [Render](./design/render.md)
+- [Node display](./design/node-display.md)
 
 # Contribution guide
 

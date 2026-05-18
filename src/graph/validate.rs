@@ -1,10 +1,17 @@
-//! Graph validation: cycle detection via iterative DFS over the union
-//! of every edge kind.
+//! Graph validation: cycle detection via iterative DFS over the
+//! dependency-bearing edge kinds.
 //!
 //! Self-edges are rejected by [`crate::graph::Graph::from_fetch`] and
 //! never reach this layer. Off-board endpoints already either became
 //! ghost nodes or were dropped — every edge in the input has both
 //! endpoints in `Graph.nodes`.
+//!
+//! **Cross-references are excluded from cycle detection.** GitHub
+//! cross-references are commonly bidirectional (A mentions #B, B
+//! mentions #A) and the render layer already treats them as decorative
+//! via `constraint=false` — they do not represent a dependency
+//! relationship. Including them here would reject perfectly fine boards
+//! as cyclic.
 //!
 //! Strategy: classic three-colour DFS with parent pointers, walked from
 //! each `Graph.nodes` entry in stored (sorted) order. The first
@@ -37,9 +44,13 @@ impl Graph {
     pub fn validate(&self) -> Result<(), CycleReport> {
         // Adjacency: source NodeId -> Vec<(EdgeKind, target NodeId)>. Edges
         // are already sorted by (source, kind, target), so each list is
-        // built in deterministic order.
+        // built in deterministic order. CrossReference edges are skipped
+        // — see module doc.
         let mut adjacency: HashMap<&NodeId, Vec<(EdgeKind, &NodeId)>> = HashMap::new();
         for edge in &self.edges {
+            if matches!(edge.kind, EdgeKind::CrossReference) {
+                continue;
+            }
             adjacency
                 .entry(&edge.source)
                 .or_default()
@@ -267,8 +278,41 @@ mod tests {
     }
 
     #[test]
-    fn cycle_across_multiple_edge_kinds_is_detected() {
-        // 1 -SubIssue-> 2 -Blocks-> 3 -CrossReference-> 1
+    fn cycle_across_sub_issue_and_blocks_is_detected() {
+        // 1 -SubIssue-> 2 -Blocks-> 3 -Blocks-> 1
+        let g = graph_with(
+            vec![iss("o", "r", 1), iss("o", "r", 2), iss("o", "r", 3)],
+            vec![
+                edge(EdgeKind::SubIssue, iss("o", "r", 1), iss("o", "r", 2)),
+                edge(EdgeKind::Blocks, iss("o", "r", 2), iss("o", "r", 3)),
+                edge(EdgeKind::Blocks, iss("o", "r", 3), iss("o", "r", 1)),
+            ],
+        );
+        let report = g.validate().unwrap_err();
+        assert_eq!(
+            report.kinds,
+            vec![EdgeKind::SubIssue, EdgeKind::Blocks, EdgeKind::Blocks]
+        );
+    }
+
+    #[test]
+    fn bidirectional_cross_reference_is_not_a_cycle() {
+        // A common GitHub pattern: A mentions #B, B mentions #A. Both
+        // edges are CrossReference and must be ignored by validation.
+        let g = graph_with(
+            vec![iss("o", "r", 1), iss("o", "r", 2)],
+            vec![
+                edge(EdgeKind::CrossReference, iss("o", "r", 1), iss("o", "r", 2)),
+                edge(EdgeKind::CrossReference, iss("o", "r", 2), iss("o", "r", 1)),
+            ],
+        );
+        assert!(g.validate().is_ok());
+    }
+
+    #[test]
+    fn cross_reference_closing_a_dependency_path_is_not_a_cycle() {
+        // 1 -SubIssue-> 2 -Blocks-> 3 -CrossReference-> 1. The CrossRef
+        // edge does not close the cycle for validation purposes.
         let g = graph_with(
             vec![iss("o", "r", 1), iss("o", "r", 2), iss("o", "r", 3)],
             vec![
@@ -277,15 +321,7 @@ mod tests {
                 edge(EdgeKind::CrossReference, iss("o", "r", 3), iss("o", "r", 1)),
             ],
         );
-        let report = g.validate().unwrap_err();
-        assert_eq!(
-            report.kinds,
-            vec![
-                EdgeKind::SubIssue,
-                EdgeKind::Blocks,
-                EdgeKind::CrossReference,
-            ]
-        );
+        assert!(g.validate().is_ok());
     }
 
     #[test]

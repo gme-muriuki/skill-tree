@@ -4,16 +4,15 @@ expression: "to_dot(&g, &opts)"
 ---
 digraph SkillTree {
     rankdir = "LR";
-    "o/r#4" [label="#4: D", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/4", tooltip="State: OPEN"];
-    subgraph "cluster_compiler-frontend" {
-        label = "Frontend";
-        style = "rounded";
-        "o/r#1" [label="#1: A", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/1", tooltip="State: OPEN"];
-        "o/r#3" [label="#3: C", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/3", tooltip="State: OPEN"];
-    }
-    subgraph "cluster_compiler-mir" {
-        label = "MIR";
-        style = "rounded";
-        "o/r#2" [label="#2: B", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/2", tooltip="State: OPEN"];
-    }
+    graph [fontname="Helvetica,Arial,sans-serif"];
+    node  [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, margin="0.18,0.08", penwidth=1.5];
+    "__cluster_compiler-frontend__" [label="Frontend", style="rounded,filled", peripheries=2, fillcolor="#666666", fontcolor="white"];
+    "__cluster_compiler-mir__" [label="MIR", style="rounded,filled", peripheries=2, fillcolor="#666666", fontcolor="white"];
+    "o/r#1" [label="#1: A\nOPEN", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1", URL="https://github.com/o/r/issues/1"];
+    "o/r#2" [label="#2: B\nOPEN", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1", URL="https://github.com/o/r/issues/2"];
+    "o/r#3" [label="#3: C\nOPEN", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1", URL="https://github.com/o/r/issues/3"];
+    "o/r#4" [label="#4: D\nOPEN", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1", URL="https://github.com/o/r/issues/4"];
+    "__cluster_compiler-frontend__" -> "o/r#1";
+    "__cluster_compiler-frontend__" -> "o/r#3";
+    "__cluster_compiler-mir__" -> "o/r#2";
 }

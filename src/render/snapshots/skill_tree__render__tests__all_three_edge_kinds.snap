@@ -4,10 +4,12 @@ expression: "to_dot(&g, &opts())"
 ---
 digraph SkillTree {
     rankdir = "LR";
-    "o/r#1" [label="#1: A", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/1", tooltip="State: OPEN"];
-    "o/r#2" [label="#2: B", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/2", tooltip="State: OPEN"];
-    "o/r#3" [label="#3: C", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/3", tooltip="State: OPEN"];
-    "o/r#2" -> "o/r#1" [style=solid, tooltip="sub-issue"];
-    "o/r#3" -> "o/r#1" [style=solid, tooltip="blocks"];
-    "o/r#1" -> "o/r#2" [style=dashed, constraint=false, tooltip="cross-reference"];
+    graph [fontname="Helvetica,Arial,sans-serif"];
+    node  [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, margin="0.18,0.08", penwidth=1.5];
+    "o/r#1" [label="#1: A\nOPEN", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1", URL="https://github.com/o/r/issues/1"];
+    "o/r#2" [label="#2: B\nOPEN", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1", URL="https://github.com/o/r/issues/2"];
+    "o/r#3" [label="#3: C\nOPEN", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1", URL="https://github.com/o/r/issues/3"];
+    "o/r#2" -> "o/r#1" [style=solid, constraint=false, tooltip="sub-issue: o/r#2 → o/r#1"];
+    "o/r#3" -> "o/r#1" [style=solid, constraint=false, tooltip="blocks: o/r#3 → o/r#1"];
+    "o/r#1" -> "o/r#2" [style=dashed, constraint=false, penwidth=0.7, color="#b07aa1", tooltip="cross-reference: o/r#1 → o/r#2"];
 }

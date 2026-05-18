@@ -78,10 +78,11 @@ pub async fn render_to_bytes(
         .collect();
 
     let edges = fetch_issue_edges(client, &issue_ids).await?;
+    let project_title = project.meta.title.clone();
     let graph = Graph::from_fetch(project, edges, config)?;
     graph.validate()?;
 
-    let opts = build_render_opts(config);
+    let opts = build_render_opts(config, Some(project_title));
     let dot = to_dot(&graph, &opts);
 
     match resolve_format(args.format, args.output.as_deref()) {
@@ -114,11 +115,12 @@ fn write_output(output: Option<&Path>, bytes: &[u8]) -> Result<(), CliError> {
     }
 }
 
-fn build_render_opts(config: &Config) -> RenderOpts {
+fn build_render_opts(config: &Config, project_title: Option<String>) -> RenderOpts {
     RenderOpts {
         colors: config.colors.values.clone(),
         cluster_labels: config.cluster.values.clone(),
         default_color: DEFAULT_COLOR.to_string(),
+        project_title,
     }
 }
 

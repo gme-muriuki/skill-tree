@@ -55,7 +55,7 @@ Groups nodes into Graphviz subgraphs by the value of a GitHub SingleSelect field
 
 ### `[edges.cross-ref]`
 
-Configures which GitHub cross-references become graph edges. `require-labels` is a list of label names. A cross-reference renders only if its source carries at least one listed label (exact-name, any-of). The default is the empty list — every cross-reference drops. Cross-refs are noisy by nature; users opt in by listing the labels that mark "this mention is a real dependency".
+Configures which GitHub cross-references become graph edges. `require-labels` is an opt-in narrowing filter: when non-empty, a cross-reference renders only if its source carries at least one listed label (exact-name, any-of). The default is the empty list — every cross-reference renders. Users on noisy boards add labels that mark "this mention is a real dependency" to cut PR-to-issue chatter.
 
 ## Field auto-discovery
 

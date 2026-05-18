@@ -102,10 +102,11 @@ pub struct EdgesConfig {
 
 /// Filters which GitHub cross-references become edges.
 ///
-/// Cross-references are noisy by default (every `Fixes #123` mention).
-/// `require_labels` opts in: a cross-reference becomes an edge only if its
-/// source issue/PR carries at least one of the listed labels. An empty list
-/// (the default) drops every cross-reference.
+/// `require_labels` is an opt-in narrowing filter: when non-empty, a
+/// cross-reference becomes an edge only if its source issue/PR carries
+/// at least one of the listed labels. An empty list (the default)
+/// includes every cross-reference — useful for first-look renders;
+/// users on noisy boards add labels here to cut the volume.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct CrossRefConfig {
     #[serde(rename = "require-labels", default)]

@@ -75,7 +75,7 @@ Both vectors are sorted at build time. Render walks them in stored order; `Graph
 2. **On-board set.** A `HashSet<NodeId>` over the materialized nodes, consulted for every endpoint check below.
 3. **Sub-issue edges.** Walk `IssueContent.sub_issues.nodes` for each Issue node. Off-board targets become **ghost nodes** (added to the node set) per [node model](./node-model.md). Self-edges produce `BuildError::SelfEdge`.
 4. **Blocking edges.** Walk `RawIssueEdges.issues[].blocking` per source issue. Off-board targets become ghost nodes. Self-edges error.
-5. **Cross-reference edges.** Walk `RawIssueEdges.issues[].cross_references` per target issue. **Both endpoints must be on board** — off-board sources drop silently per [edge convention](./edge-convention.md). Self-edges error. `[edges.cross-ref] require-labels` is restrictive: an empty list (the default) drops every cross-reference; otherwise the source's inlined `labels` must contain at least one listed name (exact match).
+5. **Cross-reference edges.** Walk `RawIssueEdges.issues[].cross_references` per target issue. **Both endpoints must be on board** — off-board sources drop silently per [edge convention](./edge-convention.md). Self-edges error. `[edges.cross-ref] require-labels` is permissive: an empty list (the default) includes every cross-reference; a non-empty list narrows to sources whose inlined `labels` contain at least one listed name (exact match).
 6. **Sort.** `nodes` by `Ord`; `edges` walked by source in node order, then by `(kind, target)`.
 
 ## Errors
@@ -98,6 +98,6 @@ pub struct CycleReport {
 
 ## Validation
 
-`Graph::validate` runs an iterative DFS over the union of all edge kinds — a `SubIssue → Blocks → CrossReference → ...` round-trip is still a cycle. The first detected back-edge produces a `CycleReport` containing the path from the back-edge target through the active DFS stack and back. Subcommands run validate after build; render aborts non-zero before emission.
+`Graph::validate` runs an iterative DFS over `SubIssue` and `Blocks` edges only. **Cross-references are excluded from cycle detection**: bidirectional cross-refs are normal on real GitHub boards (A mentions #B, B mentions #A) and the render layer already treats cross-refs as decorative via `constraint=false`. Including them would reject benign boards as cyclic. A `SubIssue → Blocks → SubIssue → ...` round-trip is still a cycle; a path closed by a CrossReference edge is not. The first detected back-edge produces a `CycleReport` containing the path from the back-edge target through the active DFS stack and back. Subcommands run validate after build; render aborts non-zero before emission.
 
 The `validate` subcommand prints the cycle path; finding *all* simple cycles (Johnson's algorithm) is deferred to a future flag if real boards demand it.

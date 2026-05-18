@@ -4,8 +4,10 @@ expression: "to_dot(&g, &opts())"
 ---
 digraph SkillTree {
     rankdir = "LR";
-    "ext/lib#99" [label="ext/lib#99", shape=box, style=dashed, URL="https://github.com/ext/lib/issues/99"];
-    "o/r#1" [label="#1: Issue", shape=box, style=filled, fillcolor="#dddddd", URL="https://github.com/o/r/issues/1", tooltip="State: OPEN"];
-    "DI_a" [label="Draft", shape=note, style=filled, fillcolor="#dddddd"];
-    "PVTI_x" [label="[redacted]", shape=box, style="dashed,filled", fillcolor="#dddddd"];
+    graph [fontname="Helvetica,Arial,sans-serif"];
+    node  [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, margin="0.18,0.08", penwidth=1.5];
+    "ext/lib#99" [label="ext/lib#99", style="rounded,dashed", URL="https://github.com/ext/lib/issues/99"];
+    "o/r#1" [label="#1: Issue\nOPEN", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1", URL="https://github.com/o/r/issues/1"];
+    "DI_a" [label="Draft", shape=note, fillcolor="#dddddd", fontcolor="black", color="#b1b1b1"];
+    "PVTI_x" [label="[redacted]", style="rounded,dashed,filled", fillcolor="#dddddd", fontcolor="black", color="#b1b1b1"];
 }

@@ -277,8 +277,10 @@ impl Graph {
 
         // Step 5: cross-reference edges (mentioner → mentioned). Both
         // endpoints must be on the on-board snapshot — ghosts added in
-        // steps 3/4 do not count as "on-board" for cross-refs. Restrictive
-        // label filter: empty `require_labels` drops every cross-reference.
+        // steps 3/4 do not count as "on-board" for cross-refs. Permissive
+        // label filter: when `require_labels` is non-empty, the source
+        // must carry at least one listed label; empty list (default)
+        // includes every cross-reference.
         let require_labels = &config.edges.cross_ref.require_labels;
         for record in &edges.issues {
             let Some(target_id) = gh_id_to_node_id.get(&record.id).cloned() else {
@@ -315,15 +317,14 @@ impl Graph {
                 if !on_board.contains(&source_id) {
                     continue;
                 }
-                if require_labels.is_empty() {
-                    continue;
-                }
-                let matches = labels
-                    .nodes
-                    .iter()
-                    .any(|l| require_labels.iter().any(|r| r == &l.name));
-                if !matches {
-                    continue;
+                if !require_labels.is_empty() {
+                    let matches = labels
+                        .nodes
+                        .iter()
+                        .any(|l| require_labels.iter().any(|r| r == &l.name));
+                    if !matches {
+                        continue;
+                    }
                 }
                 edges_out.push(Edge {
                     kind: EdgeKind::CrossReference,
@@ -952,7 +953,7 @@ mod tests {
     // -- Step 5: cross-reference edges --
 
     #[test]
-    fn cross_ref_drops_all_when_require_labels_empty() {
+    fn cross_ref_included_when_require_labels_empty() {
         let source = issue_item(issue_content("I_b", "o", "r", 2, "mentioner", vec![]));
         let target = issue_item(issue_content("I_a", "o", "r", 1, "target", vec![]));
         let raw = RawIssueEdges {
@@ -966,6 +967,35 @@ mod tests {
             project(vec![source, target]),
             raw,
             &config_with_cross_ref_labels(&[]),
+        )
+        .unwrap();
+        let xrefs: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::CrossReference)
+            .collect();
+        assert_eq!(
+            xrefs.len(),
+            1,
+            "empty require_labels should include every cross-reference"
+        );
+    }
+
+    #[test]
+    fn cross_ref_filtered_out_when_source_lacks_required_label() {
+        let source = issue_item(issue_content("I_b", "o", "r", 2, "mentioner", vec![]));
+        let target = issue_item(issue_content("I_a", "o", "r", 1, "target", vec![]));
+        let raw = RawIssueEdges {
+            issues: vec![issue_edge_record(
+                "I_a",
+                vec![],
+                vec![cross_ref_source("o", "r", 2, &["unrelated"])],
+            )],
+        };
+        let graph = Graph::from_fetch(
+            project(vec![source, target]),
+            raw,
+            &config_with_cross_ref_labels(&["tracking"]),
         )
         .unwrap();
         assert!(

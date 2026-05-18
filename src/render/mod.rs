@@ -1,10 +1,11 @@
 //! DOT and SVG rendering for a [`Graph`].
 //!
-//! See `md/design/render.md` for the design decisions that drive the
-//! attribute set, the cluster grouping, the chaos-reduction tactics
-//! (`constraint=false` on cross-references, `style=rounded` clusters
-//! with no fill), and the deterministic output guarantee.
+//! Layout decisions live in `md/design/render.md`. Per-node label,
+//! tooltip, and styling decisions live in `md/design/node-display.md`.
 
+mod body;
+mod label;
+mod style;
 mod svg;
 
 pub use svg::dot_to_svg;
@@ -14,15 +15,43 @@ use std::fmt::Write as _;
 
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
+use self::body::{BODY_TOOLTIP_LIMIT, clean_body};
+use self::label::format_label;
+use self::style::{cross_ref_color, darken_hex, pick_text_color};
+
 /// Fallback fill color when a node has no status, the status is not in
 /// `[colors.values]`, or `RenderOpts.default_color` is empty. Reused by
 /// `cli::render` so the CLI and renderer agree on one chrome tone.
 pub const DEFAULT_COLOR: &str = "#dddddd";
-const BODY_TOOLTIP_LIMIT: usize = 200;
+
+/// Portable Graphviz font chain. Helvetica covers macOS and modern
+/// Windows; Arial covers older Windows; `sans-serif` is the abstract
+/// fallback Graphviz resolves to whatever the system considers default.
+const FONT_NAME: &str = "Helvetica,Arial,sans-serif";
+
+/// Each RGB channel of the fill is multiplied by this factor to derive
+/// the border color. 80% gives the border a slightly darker tone than
+/// the fill, which reads as a deliberate outline rather than a noisy
+/// second color.
+const BORDER_DARKEN_FACTOR: f32 = 0.80;
+
+/// Identifier of the synthetic project root node. The double-underscore
+/// guard never collides with a real GitHub identifier (`owner/repo#N`,
+/// `DI_…`, `PVTI_…`).
+const PROJECT_ROOT_ID: &str = "__project__";
+
+/// Identifier of the synthetic Uncategorized cluster header.
+const UNCATEGORIZED_ID: &str = "__cluster_uncategorized__";
+
+/// Fill color of the project root node. Dark to anchor the tree spine
+/// and read as a heading rather than another data point.
+const PROJECT_ROOT_FILL: &str = "#222222";
+
+/// Fill color of cluster header nodes — one rung lighter than the root.
+const CLUSTER_HEADER_FILL: &str = "#666666";
 
 /// Render-time options derived from [`crate::config::Config`] plus CLI
-/// flags. Owns its data so `to_dot` is independent of the config layer
-/// — easier to drive from unit tests.
+/// flags. Owns its data so `to_dot` is independent of the config layer.
 #[derive(Debug, Clone, Default)]
 pub struct RenderOpts {
     /// Option-name → hex (from `[colors.values]`).
@@ -32,14 +61,17 @@ pub struct RenderOpts {
     /// Fallback fill color when a node has no status or its status is
     /// not in `colors`.
     pub default_color: String,
+    /// Title of the underlying GitHub Project, threaded through from
+    /// `ProjectMeta.title`. When `Some`, render emits a synthetic root
+    /// node at the head of the tree; when `None`, the cluster headers
+    /// are top-level. Unit tests use `None`; the CLI always populates.
+    pub project_title: Option<String>,
 }
 
 /// Render `graph` to a Graphviz DOT document. Infallible — `Graph` is
 /// already validated before it reaches this layer.
 ///
-/// Deterministic: byte-identical output for byte-identical inputs. The
-/// implementation walks `graph.nodes` and `graph.edges` in their stored
-/// (sorted) order; no `HashMap` iteration appears in the output path.
+/// Deterministic: byte-identical output for byte-identical inputs.
 pub fn to_dot(graph: &Graph, opts: &RenderOpts) -> String {
     let default_color = if opts.default_color.is_empty() {
         DEFAULT_COLOR
@@ -50,31 +82,69 @@ pub fn to_dot(graph: &Graph, opts: &RenderOpts) -> String {
     let mut out = String::new();
     writeln!(out, "digraph SkillTree {{").unwrap();
     writeln!(out, "    rankdir = \"LR\";").unwrap();
+    writeln!(out, "    graph [fontname=\"{FONT_NAME}\"];").unwrap();
+    writeln!(
+        out,
+        "    node  [shape=box, style=\"rounded,filled\", fontname=\"{FONT_NAME}\", \
+fontsize=11, margin=\"0.18,0.08\", penwidth=1.5];"
+    )
+    .unwrap();
 
-    // Partition nodes into clusters (in first-appearance order under
-    // node sort) and a top-level "unclustered" bucket. We need the
-    // cluster's display label *and* the ordered list of node indices,
-    // so we collect both in one pass.
     let (cluster_order, cluster_members, unclustered) = partition_clusters(&graph.nodes);
+    let has_root = opts.project_title.is_some();
+    let uncategorized_used = has_root && !unclustered.is_empty();
 
-    for idx in &unclustered {
-        emit_node(&mut out, &graph.nodes[*idx], opts, default_color, 1);
+    // Synthetic project root sits at rank 0 when a title is set.
+    if let Some(title) = &opts.project_title {
+        emit_project_root(&mut out, title);
     }
 
-    for cluster_key in &cluster_order {
-        emit_cluster(
-            &mut out,
-            cluster_key,
-            cluster_members
-                .get(cluster_key)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-            &graph.nodes,
-            opts,
-            default_color,
-        );
+    // Cluster headers at rank 1: real clusters in first-occurrence
+    // order, then optional Uncategorized so the eye reads meaningful
+    // categories first.
+    for key in &cluster_order {
+        emit_cluster_header(&mut out, key, opts);
+    }
+    if uncategorized_used {
+        emit_uncategorized_header(&mut out);
     }
 
+    // Issue nodes flat (no subgraph grouping). The tree edge from
+    // header → issue conveys cluster membership.
+    for node in &graph.nodes {
+        emit_node(&mut out, node, opts, default_color, 1);
+    }
+
+    // Tree edges drive the layout. Project → cluster (when root
+    // present), then cluster → issue.
+    if has_root {
+        for key in &cluster_order {
+            emit_tree_edge(&mut out, PROJECT_ROOT_ID, &cluster_header_id(key));
+        }
+        if uncategorized_used {
+            emit_tree_edge(&mut out, PROJECT_ROOT_ID, UNCATEGORIZED_ID);
+        }
+    }
+    for key in &cluster_order {
+        let header_id = cluster_header_id(key);
+        if let Some(members) = cluster_members.get(key) {
+            for idx in members {
+                emit_tree_edge(&mut out, &header_id, &graph.nodes[*idx].id.to_string());
+            }
+        }
+    }
+    if uncategorized_used {
+        for idx in &unclustered {
+            emit_tree_edge(
+                &mut out,
+                UNCATEGORIZED_ID,
+                &graph.nodes[*idx].id.to_string(),
+            );
+        }
+    }
+
+    // Data edges (sub-issue, blocks, cross-ref) all carry
+    // constraint=false so the tree spine wins layout.
     for edge in &graph.edges {
         emit_edge(&mut out, edge);
     }
@@ -111,13 +181,9 @@ fn partition_clusters(nodes: &[Node]) -> (Vec<String>, HashMap<String, Vec<usize
     (order, members, unclustered)
 }
 
-/// One DOT line for a node, fully attribute-styled. `indent_level`
-/// gives the leading-space count in multiples of 4 — 1 for top-level,
-/// 2 for nodes inside a cluster subgraph.
-///
-/// `Node.label` is already in the right per-kind form (built by
-/// [`crate::graph::Graph::from_fetch`]), so render just propagates it
-/// verbatim.
+/// One DOT line for a node. Graph-level defaults (set in `to_dot`)
+/// cover shape, base style, font, and margin; per-node lines only emit
+/// what differs.
 fn emit_node(
     out: &mut String,
     node: &Node,
@@ -127,43 +193,14 @@ fn emit_node(
 ) {
     let indent = "    ".repeat(indent_level);
     let id = quote(&node.id.to_string());
-    let label = quote(&node.label);
+    let label = quote(&format_label(node));
 
     write!(out, "{indent}{id} [label={label}").unwrap();
-
-    match node.kind {
-        NodeKind::Issue | NodeKind::PullRequest => {
-            write!(out, ", shape=box, style=filled").unwrap();
-            write!(
-                out,
-                ", fillcolor={}",
-                quote(fill_color(node, opts, default_color))
-            )
-            .unwrap();
-        }
-        NodeKind::DraftIssue => {
-            write!(out, ", shape=note, style=filled").unwrap();
-            write!(
-                out,
-                ", fillcolor={}",
-                quote(fill_color(node, opts, default_color))
-            )
-            .unwrap();
-        }
-        NodeKind::Redacted => {
-            // `style` carries two values, must be quoted as one.
-            write!(out, ", shape=box, style=\"dashed,filled\"").unwrap();
-            write!(out, ", fillcolor={}", quote(default_color)).unwrap();
-        }
-        NodeKind::Ghost => {
-            write!(out, ", shape=box, style=dashed").unwrap();
-        }
-    }
+    write_chrome(out, node, opts, default_color);
 
     if let Some(url) = &node.url {
         write!(out, ", URL={}", quote(url)).unwrap();
     }
-
     if let Some(tip) = node_tooltip(node) {
         write!(out, ", tooltip={}", quote(&tip)).unwrap();
     }
@@ -171,7 +208,39 @@ fn emit_node(
     writeln!(out, "];").unwrap();
 }
 
-/// Resolve a node's `fillcolor`: `opts.colors[status]` when present,
+/// Per-kind chrome: shape/style overrides plus fill/border/text colors.
+fn write_chrome(out: &mut String, node: &Node, opts: &RenderOpts, default_color: &str) {
+    match node.kind {
+        NodeKind::Issue | NodeKind::PullRequest => {
+            write_color_attrs(out, fill_color(node, opts, default_color));
+        }
+        NodeKind::DraftIssue => {
+            write!(out, ", shape=note").unwrap();
+            write_color_attrs(out, fill_color(node, opts, default_color));
+        }
+        NodeKind::Redacted => {
+            write!(out, ", style=\"rounded,dashed,filled\"").unwrap();
+            write_color_attrs(out, default_color);
+        }
+        NodeKind::Ghost => {
+            write!(out, ", style=\"rounded,dashed\"").unwrap();
+        }
+    }
+}
+
+/// `fillcolor`, `fontcolor` (luma-based), and `color` (darkened border).
+fn write_color_attrs(out: &mut String, fill: &str) {
+    write!(out, ", fillcolor={}", quote(fill)).unwrap();
+    write!(out, ", fontcolor={}", quote(pick_text_color(fill))).unwrap();
+    write!(
+        out,
+        ", color={}",
+        quote(&darken_hex(fill, BORDER_DARKEN_FACTOR))
+    )
+    .unwrap();
+}
+
+/// Resolve a node's fill color: `opts.colors[status]` when present,
 /// `default_color` otherwise.
 fn fill_color<'a>(node: &Node, opts: &'a RenderOpts, default_color: &'a str) -> &'a str {
     node.status
@@ -181,95 +250,107 @@ fn fill_color<'a>(node: &Node, opts: &'a RenderOpts, default_color: &'a str) -> 
         .unwrap_or(default_color)
 }
 
-/// Per-node tooltip text or `None` (skip the attribute entirely).
-///
-/// Ghost and Redacted carry no body/state/assignee data, so they get
-/// no tooltip — the visual style (dashed border) already conveys what
-/// they are.
+/// Tooltip: cleaned issue body, or `None` to omit the attribute. State
+/// and assignees already appear in the label, so the tooltip does not
+/// repeat them.
 fn node_tooltip(node: &Node) -> Option<String> {
     if matches!(node.kind, NodeKind::Ghost | NodeKind::Redacted) {
         return None;
     }
-
-    let mut lines: Vec<String> = Vec::new();
-    if let Some(state) = &node.state {
-        lines.push(format!("State: {state}"));
-    }
-    if !node.assignees.is_empty() {
-        lines.push(format!("Assignees: {}", node.assignees.join(", ")));
-    }
-    if let Some(body) = &node.body
-        && !body.is_empty()
-    {
-        // Blank line separator before the body, but only if we already
-        // added header lines.
-        if !lines.is_empty() {
-            lines.push(String::new());
-        }
-        lines.push(truncate(body, BODY_TOOLTIP_LIMIT));
-    }
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
+    let body = node.body.as_deref()?;
+    let cleaned = clean_body(body, BODY_TOOLTIP_LIMIT);
+    (!cleaned.is_empty()).then_some(cleaned)
 }
 
-/// Truncate a string to at most `limit` chars, appending `…` when
-/// truncated. Operates on chars (not bytes) so it doesn't split UTF-8
-/// code points.
-fn truncate(s: &str, limit: usize) -> String {
-    if s.chars().count() <= limit {
-        s.to_owned()
-    } else {
-        let mut out: String = s.chars().take(limit).collect();
-        out.push('…');
-        out
-    }
+/// Quoted DOT identifier for the cluster header derived from a raw
+/// `[cluster]` option value.
+fn cluster_header_id(key: &str) -> String {
+    format!("__cluster_{key}__")
 }
 
-/// One DOT subgraph for a cluster, with its label and contained nodes.
-fn emit_cluster(
-    out: &mut String,
-    cluster_key: &str,
-    member_indices: &[usize],
-    nodes: &[Node],
-    opts: &RenderOpts,
-    default_color: &str,
-) {
-    let cluster_id = quote(&format!("cluster_{cluster_key}"));
-    let cluster_label = opts
+/// Synthetic project root at rank 0. Fixed dark fill, double border,
+/// white text — visually distinct from issues but uses only attributes
+/// that round-trip cleanly through draw.io.
+fn emit_project_root(out: &mut String, title: &str) {
+    emit_header_node(out, PROJECT_ROOT_ID, title, PROJECT_ROOT_FILL);
+}
+
+/// One synthetic header per distinct `[cluster]` value at rank 1. Label
+/// from `opts.cluster_labels` lookup, falling back to the raw key.
+fn emit_cluster_header(out: &mut String, key: &str, opts: &RenderOpts) {
+    let label = opts
         .cluster_labels
-        .get(cluster_key)
-        .cloned()
-        .unwrap_or_else(|| cluster_key.to_owned());
-
-    writeln!(out, "    subgraph {cluster_id} {{").unwrap();
-    writeln!(out, "        label = {};", quote(&cluster_label)).unwrap();
-    writeln!(out, "        style = \"rounded\";").unwrap();
-    for idx in member_indices {
-        emit_node(out, &nodes[*idx], opts, default_color, 2);
-    }
-    writeln!(out, "    }}").unwrap();
+        .get(key)
+        .map(String::as_str)
+        .unwrap_or(key);
+    emit_header_node(out, &cluster_header_id(key), label, CLUSTER_HEADER_FILL);
 }
 
-/// One DOT line for a directed edge. Cross-references carry
-/// `constraint=false` so they decorate without warping the spine.
+/// Synthetic Uncategorized header — same chrome as a real cluster
+/// header so unclustered nodes don't look like orphans.
+fn emit_uncategorized_header(out: &mut String) {
+    emit_header_node(out, UNCATEGORIZED_ID, "Uncategorized", CLUSTER_HEADER_FILL);
+}
+
+/// Shared emission for project root, cluster headers, and Uncategorized.
+fn emit_header_node(out: &mut String, id: &str, label: &str, fill: &str) {
+    writeln!(
+        out,
+        "    {} [label={}, style=\"rounded,filled\", peripheries=2, \
+fillcolor={}, fontcolor=\"white\"];",
+        quote(id),
+        quote(label),
+        quote(fill),
+    )
+    .unwrap();
+}
+
+/// Tree edge `src -> tgt;` with no attribute block: solid by default,
+/// constraint=true by default, no tooltip needed (the relationship is
+/// obvious from the structure).
+fn emit_tree_edge(out: &mut String, src: &str, tgt: &str) {
+    writeln!(out, "    {} -> {};", quote(src), quote(tgt)).unwrap();
+}
+
+/// One DOT line for a data edge. All data edges (sub-issue, blocks,
+/// cross-ref) carry `constraint=false` so the tree spine drives the
+/// layout. Edge kind is signalled by style — solid for sub-issue and
+/// blocking, dashed for cross-reference.
+///
+/// Cross-reference edges additionally get a per-source color from a
+/// 10-hue qualitative palette and a thinner stroke (`penwidth=0.7`),
+/// so a dense board with many cross-refs stays traceable: edges
+/// leaving the same source share a hue, the lighter weight makes them
+/// recede behind the tree spine, and the enriched tooltip names the
+/// two endpoints.
 fn emit_edge(out: &mut String, edge: &Edge) {
-    let src = quote(&edge.source.to_string());
-    let tgt = quote(&edge.target.to_string());
+    let source_str = edge.source.to_string();
+    let target_str = edge.target.to_string();
+    let src = quote(&source_str);
+    let tgt = quote(&target_str);
     write!(out, "    {src} -> {tgt} [").unwrap();
+    let kind_name = match edge.kind {
+        EdgeKind::SubIssue => "sub-issue",
+        EdgeKind::Blocks => "blocks",
+        EdgeKind::CrossReference => "cross-reference",
+    };
+    let tooltip = format!("{kind_name}: {source_str} → {target_str}");
     match edge.kind {
-        EdgeKind::SubIssue => {
-            write!(out, "style=solid, tooltip=\"sub-issue\"").unwrap();
-        }
-        EdgeKind::Blocks => {
-            write!(out, "style=solid, tooltip=\"blocks\"").unwrap();
-        }
-        EdgeKind::CrossReference => {
+        EdgeKind::SubIssue | EdgeKind::Blocks => {
             write!(
                 out,
-                "style=dashed, constraint=false, tooltip=\"cross-reference\""
+                "style=solid, constraint=false, tooltip={}",
+                quote(&tooltip)
+            )
+            .unwrap();
+        }
+        EdgeKind::CrossReference => {
+            let color = cross_ref_color(&source_str);
+            write!(
+                out,
+                "style=dashed, constraint=false, penwidth=0.7, color={}, tooltip={}",
+                quote(color),
+                quote(&tooltip)
             )
             .unwrap();
         }
@@ -277,16 +358,14 @@ fn emit_edge(out: &mut String, edge: &Edge) {
     writeln!(out, "];").unwrap();
 }
 
-/// Escape a Rust string for use inside DOT double-quotes. Handles the
-/// two characters DOT cares about (`\\` and `"`), plus newline
-/// (encoded as the literal two-character escape `\n`, which Graphviz
-/// renders as a line break inside `tooltip` and `label` values).
+/// Escape a Rust string for use inside DOT double-quotes. Handles `"`
+/// and `\\`, plus newline as the literal two-character escape `\n`
+/// (Graphviz reads this as a line break inside `tooltip` and `label`).
 ///
-/// ASCII control characters below 0x20 (except tab) are dropped: GitHub
-/// issue bodies sometimes contain ANSI escape sequences from copied
-/// compiler output (`\x1B[31m...\x1B[0m`), and those bytes survive
-/// through `dot -Tsvg` into XML attribute values where they are
-/// rejected by XML 1.0. We also drop 0x7F (DEL) for the same reason.
+/// ASCII control characters below 0x20 (except tab) and 0x7F (DEL) are
+/// dropped: copied compiler-output bodies sometimes contain ANSI
+/// escapes (`\x1B[…m`) whose bare ESC byte is invalid in XML 1.0
+/// attribute values and would break `dot -Tsvg`.
 fn quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -312,8 +391,6 @@ fn quote(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::graph::NodeId;
-
-    // -- builders --
 
     fn issue_id(owner: &str, repo: &str, number: u64) -> NodeId {
         NodeId::Issue {
@@ -397,9 +474,16 @@ mod tests {
 
     fn opts() -> RenderOpts {
         RenderOpts {
-            colors: HashMap::new(),
-            cluster_labels: HashMap::new(),
             default_color: DEFAULT_COLOR.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    fn opts_with_title(title: &str) -> RenderOpts {
+        RenderOpts {
+            default_color: DEFAULT_COLOR.to_owned(),
+            project_title: Some(title.to_owned()),
+            ..Default::default()
         }
     }
 
@@ -409,19 +493,19 @@ mod tests {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
-            cluster_labels: HashMap::new(),
             default_color: DEFAULT_COLOR.to_owned(),
+            ..Default::default()
         }
     }
 
     fn opts_with_cluster_labels(pairs: &[(&str, &str)]) -> RenderOpts {
         RenderOpts {
-            colors: HashMap::new(),
             cluster_labels: pairs
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
             default_color: DEFAULT_COLOR.to_owned(),
+            ..Default::default()
         }
     }
 
@@ -450,9 +534,6 @@ mod tests {
             redacted_node("PVTI_x"),
             ghost_node_value("ext", "lib", 99),
         ];
-        // The Issue+Ghost share a sort bucket; node sort would put Ghost
-        // after Issue, but here we just leave them so the snapshot shows
-        // every kind on its own line.
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
         let g = Graph {
             nodes,
@@ -522,9 +603,8 @@ mod tests {
     }
 
     #[test]
-    fn tooltip_includes_state_assignees_and_truncated_body() {
-        let mut n = issue_node("o", "r", 1, "T");
-        n.body = Some("x".repeat(250));
+    fn label_carries_title_state_and_assignees() {
+        let mut n = issue_node("o", "r", 289, "Convert check_trait to a judgment function");
         n.assignees = vec!["alice".into(), "bob".into()];
         let g = Graph {
             nodes: vec![n],
@@ -533,7 +613,33 @@ mod tests {
         insta::assert_snapshot!(to_dot(&g, &opts()));
     }
 
+    #[test]
+    fn tooltip_is_cleaned_body() {
+        let mut n = issue_node("o", "r", 1, "T");
+        n.body = Some(
+            "<!-- hidden -->\n## Heading\nFirst sentence. **Bold** word. Second sentence here."
+                .into(),
+        );
+        let g = Graph {
+            nodes: vec![n],
+            edges: vec![],
+        };
+        insta::assert_snapshot!(to_dot(&g, &opts()));
+    }
+
     // -- structural tests --
+
+    #[test]
+    fn graph_level_defaults_emitted_once() {
+        let g = Graph::default();
+        let out = to_dot(&g, &opts());
+        assert_eq!(
+            out.matches("node  [shape=box").count(),
+            1,
+            "graph-level node default should appear exactly once"
+        );
+        assert!(out.contains("graph [fontname="));
+    }
 
     #[test]
     fn every_node_with_url_emits_url_attribute() {
@@ -546,7 +652,6 @@ mod tests {
             edges: vec![],
         };
         let out = to_dot(&g, &opts());
-        // Issue and Ghost have URLs; Draft does not.
         let url_lines = out.lines().filter(|l| l.contains("URL=")).count();
         assert_eq!(url_lines, 2, "expected URLs on Issue and Ghost only");
     }
@@ -568,7 +673,45 @@ mod tests {
     }
 
     #[test]
-    fn non_cross_reference_edges_do_not_carry_constraint_false() {
+    fn cross_reference_edges_carry_per_source_color_and_thinner_penwidth() {
+        let nodes = vec![issue_node("o", "r", 1, "A"), issue_node("o", "r", 2, "B")];
+        let edges = vec![edge(
+            EdgeKind::CrossReference,
+            issue_id("o", "r", 1),
+            issue_id("o", "r", 2),
+        )];
+        let g = Graph { nodes, edges };
+        let out = to_dot(&g, &opts());
+        assert!(out.contains("penwidth=0.7"));
+        assert!(
+            out.contains(", color=\"#"),
+            "cross-reference edge missing color hex: {out}"
+        );
+    }
+
+    #[test]
+    fn data_edge_tooltip_names_both_endpoints() {
+        let nodes = vec![issue_node("o", "r", 1, "A"), issue_node("o", "r", 2, "B")];
+        let edges = vec![
+            edge(
+                EdgeKind::SubIssue,
+                issue_id("o", "r", 2),
+                issue_id("o", "r", 1),
+            ),
+            edge(
+                EdgeKind::CrossReference,
+                issue_id("o", "r", 1),
+                issue_id("o", "r", 2),
+            ),
+        ];
+        let g = Graph { nodes, edges };
+        let out = to_dot(&g, &opts());
+        assert!(out.contains("tooltip=\"sub-issue: o/r#2 → o/r#1\""));
+        assert!(out.contains("tooltip=\"cross-reference: o/r#1 → o/r#2\""));
+    }
+
+    #[test]
+    fn all_data_edges_carry_constraint_false() {
         let nodes = vec![issue_node("o", "r", 1, "A"), issue_node("o", "r", 2, "B")];
         let edges = vec![
             edge(
@@ -581,10 +724,19 @@ mod tests {
                 issue_id("o", "r", 2),
                 issue_id("o", "r", 1),
             ),
+            edge(
+                EdgeKind::CrossReference,
+                issue_id("o", "r", 1),
+                issue_id("o", "r", 2),
+            ),
         ];
         let g = Graph { nodes, edges };
         let out = to_dot(&g, &opts());
-        assert!(!out.contains("constraint=false"));
+        assert_eq!(
+            out.matches("constraint=false").count(),
+            3,
+            "every data edge should carry constraint=false: {out}"
+        );
     }
 
     #[test]
@@ -606,27 +758,100 @@ mod tests {
         }
     }
 
+    // -- tree topology --
+
     #[test]
-    fn cluster_subgraph_contains_only_its_members() {
+    fn project_root_appears_when_title_set() {
+        let g = Graph {
+            nodes: vec![issue_node("o", "r", 1, "T")],
+            edges: vec![],
+        };
+        let out = to_dot(&g, &opts_with_title("My Project"));
+        assert!(
+            out.contains("\"__project__\" [label=\"My Project\""),
+            "project root missing or mislabeled: {out}"
+        );
+    }
+
+    #[test]
+    fn no_project_root_when_title_absent() {
+        let g = Graph {
+            nodes: vec![issue_node("o", "r", 1, "T")],
+            edges: vec![],
+        };
+        let out = to_dot(&g, &opts());
+        assert!(!out.contains("__project__"));
+    }
+
+    #[test]
+    fn cluster_header_emitted_per_distinct_cluster() {
         let mut a = issue_node("o", "r", 1, "A");
         a.cluster = Some("foo".into());
         let mut b = issue_node("o", "r", 2, "B");
         b.cluster = Some("bar".into());
+        let mut c = issue_node("o", "r", 3, "C");
+        c.cluster = Some("foo".into());
         let g = Graph {
-            nodes: vec![a, b],
+            nodes: vec![a, b, c],
             edges: vec![],
         };
         let out = to_dot(&g, &opts());
-        // Naive substring check: each cluster subgraph block should mention
-        // its sole member's identifier, not the other.
-        let foo_start = out.find("subgraph \"cluster_foo\"").unwrap();
-        let foo_end = foo_start + out[foo_start..].find("    }").unwrap();
-        let foo_block = &out[foo_start..foo_end];
-        assert!(foo_block.contains("\"o/r#1\""));
-        assert!(!foo_block.contains("\"o/r#2\""));
+        assert_eq!(out.matches("\"__cluster_foo__\" [label=").count(), 1);
+        assert_eq!(out.matches("\"__cluster_bar__\" [label=").count(), 1);
     }
 
-    // -- escaping (inline snapshots, since each output is one line) --
+    #[test]
+    fn cluster_header_uses_cluster_labels_override() {
+        let mut a = issue_node("o", "r", 1, "A");
+        a.cluster = Some("compiler-frontend".into());
+        let g = Graph {
+            nodes: vec![a],
+            edges: vec![],
+        };
+        let opts = opts_with_cluster_labels(&[("compiler-frontend", "Frontend")]);
+        let out = to_dot(&g, &opts);
+        assert!(out.contains("\"__cluster_compiler-frontend__\" [label=\"Frontend\""));
+    }
+
+    #[test]
+    fn uncategorized_header_appears_when_root_and_unclustered_mix() {
+        let mut clustered = issue_node("o", "r", 1, "A");
+        clustered.cluster = Some("foo".into());
+        let unclustered = issue_node("o", "r", 2, "B");
+        let g = Graph {
+            nodes: vec![clustered, unclustered],
+            edges: vec![],
+        };
+        let out = to_dot(&g, &opts_with_title("P"));
+        assert!(out.contains("__cluster_uncategorized__"));
+        assert!(out.contains("\"__project__\" -> \"__cluster_uncategorized__\";"));
+        assert!(out.contains("\"__cluster_uncategorized__\" -> \"o/r#2\";"));
+    }
+
+    #[test]
+    fn no_uncategorized_header_without_project_root() {
+        let g = Graph {
+            nodes: vec![issue_node("o", "r", 1, "A")],
+            edges: vec![],
+        };
+        let out = to_dot(&g, &opts());
+        assert!(!out.contains("__cluster_uncategorized__"));
+    }
+
+    #[test]
+    fn tree_edges_emit_without_constraint_attribute() {
+        let mut n = issue_node("o", "r", 1, "A");
+        n.cluster = Some("foo".into());
+        let g = Graph {
+            nodes: vec![n],
+            edges: vec![],
+        };
+        let out = to_dot(&g, &opts_with_title("P"));
+        assert!(out.contains("\"__project__\" -> \"__cluster_foo__\";"));
+        assert!(out.contains("\"__cluster_foo__\" -> \"o/r#1\";"));
+    }
+
+    // -- escaping --
 
     #[test]
     fn quote_escapes_double_quotes_backslashes_and_newlines() {
@@ -638,33 +863,8 @@ mod tests {
 
     #[test]
     fn quote_drops_ascii_control_chars_that_break_xml() {
-        // ANSI escape (`\x1B[31m`...`\x1B[0m`) commonly appears in pasted
-        // compiler-output issue bodies. The bare ESC byte is invalid in
-        // XML 1.0 attribute values, so `dot -Tsvg` would emit broken
-        // SVG. Drop control chars below 0x20 (keep tab) plus DEL.
         assert_eq!(quote("\x1B[31mICE\x1B[0m"), r#""[31mICE[0m""#);
         assert_eq!(quote("a\x00b\x07c\x7Fd"), r#""abcd""#);
-        // Tab is XML-valid and worth preserving.
         assert_eq!(quote("a\tb"), "\"a\tb\"");
-    }
-
-    #[test]
-    fn truncate_keeps_short_strings() {
-        assert_eq!(truncate("short", 10), "short");
-    }
-
-    #[test]
-    fn truncate_appends_ellipsis_when_over_limit() {
-        let out = truncate(&"x".repeat(250), 200);
-        assert_eq!(out.chars().count(), 201); // 200 chars + ellipsis
-        assert!(out.ends_with('…'));
-    }
-
-    #[test]
-    fn truncate_does_not_split_utf8() {
-        let s = "日本語日本語日本語"; // 9 chars, 27 bytes
-        let out = truncate(s, 5);
-        assert_eq!(out.chars().count(), 6); // 5 + ellipsis
-        assert!(out.ends_with('…'));
     }
 }
