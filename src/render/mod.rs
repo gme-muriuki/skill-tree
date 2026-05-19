@@ -10,7 +10,7 @@ mod svg;
 
 pub use svg::dot_to_svg;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeId, NodeKind};
@@ -81,18 +81,24 @@ pub fn to_dot(graph: &Graph, opts: &RenderOpts) -> String {
 
     let mut out = String::new();
     writeln!(out, "digraph SkillTree {{").unwrap();
-    writeln!(out, "    rankdir = \"LR\";").unwrap();
-    writeln!(out, "    graph [fontname=\"{FONT_NAME}\"];").unwrap();
+    writeln!(out, "rankdir = \"LR\";").unwrap();
+    writeln!(out, "graph [fontname=\"{FONT_NAME}\"];").unwrap();
     writeln!(
         out,
-        "    node  [shape=box, style=\"rounded,filled\", fontname=\"{FONT_NAME}\", \
+        "node [shape=box, style=\"rounded,filled\", fontname=\"{FONT_NAME}\", \
 fontsize=11, margin=\"0.18,0.08\", penwidth=1.5];"
     )
     .unwrap();
 
+    let nodes_by_id: HashMap<&NodeId, &Node> = graph.nodes.iter().map(|n| (&n.id, n)).collect();
+    let nested_children = compute_nested_children(&graph.edges, &nodes_by_id);
+
     let (cluster_order, cluster_members, unclustered) = partition_clusters(&graph.nodes);
     let has_root = opts.project_title.is_some();
-    let uncategorized_used = has_root && !unclustered.is_empty();
+    let uncategorized_has_top_level = unclustered
+        .iter()
+        .any(|idx| !nested_children.contains(&graph.nodes[*idx].id));
+    let uncategorized_used = has_root && uncategorized_has_top_level;
 
     // Synthetic project root sits at rank 0 when a title is set.
     if let Some(title) = &opts.project_title {
@@ -112,11 +118,13 @@ fontsize=11, margin=\"0.18,0.08\", penwidth=1.5];"
     // Issue nodes flat (no subgraph grouping). The tree edge from
     // header → issue conveys cluster membership.
     for node in &graph.nodes {
-        emit_node(&mut out, node, opts, default_color, 1);
+        emit_node(&mut out, node, opts, default_color);
     }
 
     // Tree edges drive the layout. Project → cluster (when root
-    // present), then cluster → issue.
+    // present), then cluster → top-level issue, then parent → nested
+    // sub-issue. Nested children skip the cluster-header link so they
+    // descend from their parent instead.
     if has_root {
         for key in &cluster_order {
             emit_tree_edge(&mut out, PROJECT_ROOT_ID, &cluster_header_id(key));
@@ -129,24 +137,43 @@ fontsize=11, margin=\"0.18,0.08\", penwidth=1.5];"
         let header_id = cluster_header_id(key);
         if let Some(members) = cluster_members.get(key) {
             for idx in members {
-                emit_tree_edge(&mut out, &header_id, &graph.nodes[*idx].id.to_string());
+                let node = &graph.nodes[*idx];
+                if nested_children.contains(&node.id) {
+                    continue;
+                }
+                emit_tree_edge(&mut out, &header_id, &node.id.to_string());
             }
         }
     }
     if uncategorized_used {
         for idx in &unclustered {
-            emit_tree_edge(
-                &mut out,
-                UNCATEGORIZED_ID,
-                &graph.nodes[*idx].id.to_string(),
-            );
+            let node = &graph.nodes[*idx];
+            if nested_children.contains(&node.id) {
+                continue;
+            }
+            emit_tree_edge(&mut out, UNCATEGORIZED_ID, &node.id.to_string());
         }
     }
+    // Sub-issue nesting: emit parent → child as a tree edge for every
+    // promoted SubIssue. Reversed from the data direction (child →
+    // parent) so the parent's tree position pulls children leftward
+    // under it. No tooltip — containment is obvious from structure.
+    for edge in &graph.edges {
+        if !matches!(edge.kind, EdgeKind::SubIssue) {
+            continue;
+        }
+        if !nested_children.contains(&edge.source) {
+            continue;
+        }
+        emit_tree_edge(&mut out, &edge.target.to_string(), &edge.source.to_string());
+    }
 
-    // Data edges (sub-issue, blocks, cross-ref) all carry
-    // constraint=false so the tree spine wins layout. Cross-refs are
-    // deduped per unordered pair; symmetric pairs emit with dir=both.
-    emit_data_edges(&mut out, &graph.edges);
+    // Data edges (sub-issue fallback, blocks, cross-ref) all carry
+    // constraint=false so the tree spine wins layout. SubIssue edges
+    // whose child was promoted to a tree edge are skipped here.
+    // Cross-refs are deduped per unordered pair; symmetric pairs
+    // emit with dir=both.
+    emit_data_edges(&mut out, &graph.edges, &nested_children);
 
     writeln!(out, "}}").unwrap();
     out
@@ -183,18 +210,11 @@ fn partition_clusters(nodes: &[Node]) -> (Vec<String>, HashMap<String, Vec<usize
 /// One DOT line for a node. Graph-level defaults (set in `to_dot`)
 /// cover shape, base style, font, and margin; per-node lines only emit
 /// what differs.
-fn emit_node(
-    out: &mut String,
-    node: &Node,
-    opts: &RenderOpts,
-    default_color: &str,
-    indent_level: usize,
-) {
-    let indent = "    ".repeat(indent_level);
+fn emit_node(out: &mut String, node: &Node, opts: &RenderOpts, default_color: &str) {
     let id = quote(&node.id.to_string());
     let label = quote(&format_label(node));
 
-    write!(out, "{indent}{id} [label={label}").unwrap();
+    write!(out, "{id} [label={label}").unwrap();
     write_chrome(out, node, opts, default_color);
 
     if let Some(url) = &node.url {
@@ -295,7 +315,7 @@ fn emit_uncategorized_header(out: &mut String) {
 fn emit_header_node(out: &mut String, id: &str, label: &str, fill: &str) {
     writeln!(
         out,
-        "    {} [label={}, style=\"rounded,filled\", peripheries=2, \
+        "{} [label={}, style=\"rounded,filled\", peripheries=2, \
 fillcolor={}, fontcolor=\"white\"];",
         quote(id),
         quote(label),
@@ -308,17 +328,49 @@ fillcolor={}, fontcolor=\"white\"];",
 /// constraint=true by default, no tooltip needed (the relationship is
 /// obvious from the structure).
 fn emit_tree_edge(out: &mut String, src: &str, tgt: &str) {
-    writeln!(out, "    {} -> {};", quote(src), quote(tgt)).unwrap();
+    writeln!(out, "{} -> {};", quote(src), quote(tgt)).unwrap();
+}
+
+/// Compute the set of children that nest under their tracking-issue
+/// parent in the tree. A SubIssue edge promotes to a tree edge iff the
+/// parent is on-board (not a Ghost) and the child either has no cluster
+/// tag or carries the same tag as the parent. Promotion is rendered as
+/// a `parent → child` tree edge in `to_dot`; non-promoted SubIssue
+/// edges fall through to `emit_data_edges` as ordinary data edges.
+fn compute_nested_children<'a>(
+    edges: &'a [Edge],
+    nodes_by_id: &HashMap<&NodeId, &Node>,
+) -> HashSet<&'a NodeId> {
+    edges
+        .iter()
+        .filter(|e| matches!(e.kind, EdgeKind::SubIssue))
+        .filter_map(|e| {
+            let child = nodes_by_id.get(&e.source)?;
+            let parent = nodes_by_id.get(&e.target)?;
+            should_nest(child, parent).then_some(&e.source)
+        })
+        .collect()
+}
+
+/// Sub-issue nesting predicate. Returns `false` when the parent is a
+/// Ghost (off-board hierarchy shouldn't warp the on-board tree) or when
+/// the child carries an explicit cluster tag different from the
+/// parent's (honors user tagging). Otherwise the child nests.
+fn should_nest(child: &Node, parent: &Node) -> bool {
+    if matches!(parent.kind, NodeKind::Ghost) {
+        return false;
+    }
+    child.cluster.is_none() || child.cluster == parent.cluster
 }
 
 /// Emit every data edge with `constraint=false` so the tree spine
-/// drives layout. Sub-issue and blocking pass through one-to-one.
-/// Cross-references dedupe per unordered pair: a symmetric pair
-/// (A↔B) emits once with `dir=both`, preserving the mutual-mention
-/// semantic without doubling the visual clutter.
-fn emit_data_edges(out: &mut String, edges: &[Edge]) {
-    use std::collections::HashSet;
-
+/// drives layout. Blocking passes through one-to-one. SubIssue edges
+/// whose child was promoted to a tree edge in `to_dot` are skipped
+/// here so each relationship emits exactly once. Cross-references
+/// dedupe per unordered pair: a symmetric pair (A↔B) emits once with
+/// `dir=both`, preserving the mutual-mention semantic without doubling
+/// the visual clutter.
+fn emit_data_edges(out: &mut String, edges: &[Edge], nested_children: &HashSet<&NodeId>) {
     let cross_ref_dirs: HashSet<(&NodeId, &NodeId)> = edges
         .iter()
         .filter(|e| matches!(e.kind, EdgeKind::CrossReference))
@@ -328,7 +380,13 @@ fn emit_data_edges(out: &mut String, edges: &[Edge]) {
 
     for edge in edges {
         match edge.kind {
-            EdgeKind::SubIssue | EdgeKind::Blocks => emit_solid_edge(out, edge),
+            EdgeKind::SubIssue => {
+                if nested_children.contains(&edge.source) {
+                    continue;
+                }
+                emit_solid_edge(out, edge);
+            }
+            EdgeKind::Blocks => emit_solid_edge(out, edge),
             EdgeKind::CrossReference => {
                 let (lo, hi) = if edge.source <= edge.target {
                     (&edge.source, &edge.target)
@@ -356,7 +414,7 @@ fn emit_solid_edge(out: &mut String, edge: &Edge) {
     let tooltip = format!("{kind_name}: {source_str} → {target_str}");
     writeln!(
         out,
-        "    {} -> {} [style=solid, constraint=false, tooltip={}];",
+        "{} -> {} [style=solid, constraint=false, tooltip={}];",
         quote(&source_str),
         quote(&target_str),
         quote(&tooltip),
@@ -378,7 +436,7 @@ fn emit_cross_ref_edge(out: &mut String, source: &NodeId, target: &NodeId, symme
     };
     writeln!(
         out,
-        "    {} -> {} [style=dashed, constraint=false, penwidth=0.7{}, color={}, tooltip={}];",
+        "{} -> {} [style=dashed, constraint=false, penwidth=0.7{}, color={}, tooltip={}];",
         quote(&source_str),
         quote(&target_str),
         dir_attr,
@@ -664,7 +722,7 @@ mod tests {
         let g = Graph::default();
         let out = to_dot(&g, &opts());
         assert_eq!(
-            out.matches("node  [shape=box").count(),
+            out.matches("node [shape=box").count(),
             1,
             "graph-level node default should appear exactly once"
         );
@@ -762,7 +820,12 @@ mod tests {
 
     #[test]
     fn data_edge_tooltip_names_both_endpoints() {
-        let nodes = vec![issue_node("o", "r", 1, "A"), issue_node("o", "r", 2, "B")];
+        // Cluster conflict keeps the SubIssue as a data edge so its
+        // tooltip is observable.
+        let mut parent = issue_node("o", "r", 1, "A");
+        parent.cluster = Some("alpha".into());
+        let mut child = issue_node("o", "r", 2, "B");
+        child.cluster = Some("beta".into());
         let edges = vec![
             edge(
                 EdgeKind::SubIssue,
@@ -775,7 +838,10 @@ mod tests {
                 issue_id("o", "r", 2),
             ),
         ];
-        let g = Graph { nodes, edges };
+        let g = Graph {
+            nodes: vec![parent, child],
+            edges,
+        };
         let out = to_dot(&g, &opts());
         assert!(out.contains("tooltip=\"sub-issue: o/r#2 → o/r#1\""));
         assert!(out.contains("tooltip=\"cross-reference: o/r#1 → o/r#2\""));
@@ -783,7 +849,12 @@ mod tests {
 
     #[test]
     fn all_data_edges_carry_constraint_false() {
-        let nodes = vec![issue_node("o", "r", 1, "A"), issue_node("o", "r", 2, "B")];
+        // Cluster conflict keeps the SubIssue as a data edge so all
+        // three kinds are observable in the data-edge stream.
+        let mut parent = issue_node("o", "r", 1, "A");
+        parent.cluster = Some("alpha".into());
+        let mut child = issue_node("o", "r", 2, "B");
+        child.cluster = Some("beta".into());
         let edges = vec![
             edge(
                 EdgeKind::SubIssue,
@@ -801,7 +872,10 @@ mod tests {
                 issue_id("o", "r", 2),
             ),
         ];
-        let g = Graph { nodes, edges };
+        let g = Graph {
+            nodes: vec![parent, child],
+            edges,
+        };
         let out = to_dot(&g, &opts());
         assert_eq!(
             out.matches("constraint=false").count(),
@@ -920,6 +994,128 @@ mod tests {
         let out = to_dot(&g, &opts_with_title("P"));
         assert!(out.contains("\"__project__\" -> \"__cluster_foo__\";"));
         assert!(out.contains("\"__cluster_foo__\" -> \"o/r#1\";"));
+    }
+
+    // -- sub-issue nesting --
+
+    #[test]
+    fn sub_issue_nests_under_parent_as_tree_edge() {
+        let g = Graph {
+            nodes: vec![
+                issue_node("o", "r", 1, "Parent"),
+                issue_node("o", "r", 2, "Child"),
+            ],
+            edges: vec![edge(
+                EdgeKind::SubIssue,
+                issue_id("o", "r", 2),
+                issue_id("o", "r", 1),
+            )],
+        };
+        let out = to_dot(&g, &opts_with_title("P"));
+        assert!(
+            out.contains("\"o/r#1\" -> \"o/r#2\";"),
+            "expected parent→child tree edge: {out}"
+        );
+        assert!(!out.contains("tooltip=\"sub-issue:"));
+        // Only the parent appears under Uncategorized; the child nests.
+        assert!(out.contains("\"__cluster_uncategorized__\" -> \"o/r#1\";"));
+        assert!(!out.contains("\"__cluster_uncategorized__\" -> \"o/r#2\";"));
+    }
+
+    #[test]
+    fn nested_sub_issue_chain_nests_at_each_level() {
+        let g = Graph {
+            nodes: vec![
+                issue_node("o", "r", 1, "Grandparent"),
+                issue_node("o", "r", 2, "Parent"),
+                issue_node("o", "r", 3, "Child"),
+            ],
+            edges: vec![
+                edge(
+                    EdgeKind::SubIssue,
+                    issue_id("o", "r", 2),
+                    issue_id("o", "r", 1),
+                ),
+                edge(
+                    EdgeKind::SubIssue,
+                    issue_id("o", "r", 3),
+                    issue_id("o", "r", 2),
+                ),
+            ],
+        };
+        let out = to_dot(&g, &opts_with_title("P"));
+        assert!(out.contains("\"o/r#1\" -> \"o/r#2\";"));
+        assert!(out.contains("\"o/r#2\" -> \"o/r#3\";"));
+        assert!(out.contains("\"__cluster_uncategorized__\" -> \"o/r#1\";"));
+        assert!(!out.contains("\"__cluster_uncategorized__\" -> \"o/r#2\";"));
+        assert!(!out.contains("\"__cluster_uncategorized__\" -> \"o/r#3\";"));
+    }
+
+    #[test]
+    fn sub_issue_inherits_parent_cluster_via_nesting() {
+        let mut parent = issue_node("o", "r", 1, "Parent");
+        parent.cluster = Some("alpha".into());
+        let child = issue_node("o", "r", 2, "Child"); // no cluster
+        let g = Graph {
+            nodes: vec![parent, child],
+            edges: vec![edge(
+                EdgeKind::SubIssue,
+                issue_id("o", "r", 2),
+                issue_id("o", "r", 1),
+            )],
+        };
+        let out = to_dot(&g, &opts_with_title("P"));
+        assert!(out.contains("\"o/r#1\" -> \"o/r#2\";"));
+        assert!(out.contains("\"__cluster_alpha__\" -> \"o/r#1\";"));
+        // No Uncategorized header — the only unclustered node is nested.
+        assert!(!out.contains("__cluster_uncategorized__"));
+    }
+
+    #[test]
+    fn sub_issue_with_ghost_parent_stays_as_data_edge() {
+        let g = Graph {
+            nodes: vec![
+                issue_node("o", "r", 1, "Child"),
+                ghost_node_value("ext", "lib", 99),
+            ],
+            edges: vec![edge(
+                EdgeKind::SubIssue,
+                issue_id("o", "r", 1),
+                ghost_id("ext", "lib", 99),
+            )],
+        };
+        let out = to_dot(&g, &opts_with_title("P"));
+        assert!(
+            out.contains("tooltip=\"sub-issue: o/r#1 → ext/lib#99\""),
+            "expected SubIssue with ghost parent to render as data edge: {out}"
+        );
+        // Child stays in its own (Uncategorized) cluster — not nested.
+        assert!(out.contains("\"__cluster_uncategorized__\" -> \"o/r#1\";"));
+    }
+
+    #[test]
+    fn sub_issue_with_cluster_conflict_stays_as_data_edge() {
+        let mut parent = issue_node("o", "r", 1, "Parent");
+        parent.cluster = Some("alpha".into());
+        let mut child = issue_node("o", "r", 2, "Child");
+        child.cluster = Some("beta".into());
+        let g = Graph {
+            nodes: vec![parent, child],
+            edges: vec![edge(
+                EdgeKind::SubIssue,
+                issue_id("o", "r", 2),
+                issue_id("o", "r", 1),
+            )],
+        };
+        let out = to_dot(&g, &opts_with_title("P"));
+        assert!(
+            out.contains("tooltip=\"sub-issue: o/r#2 → o/r#1\""),
+            "expected SubIssue with conflicting clusters to stay as data edge: {out}"
+        );
+        assert!(out.contains("\"__cluster_alpha__\" -> \"o/r#1\";"));
+        assert!(out.contains("\"__cluster_beta__\" -> \"o/r#2\";"));
+        // No reversed parent→child tree edge.
+        assert!(!out.contains("\"o/r#1\" -> \"o/r#2\";"));
     }
 
     // -- escaping --

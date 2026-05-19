@@ -207,10 +207,16 @@ async fn small_project_renders_nodes_and_sub_issue_edge() {
     assert!(dot.contains("\"o/r#1\""), "expected #1 node: {dot}");
     assert!(dot.contains("\"o/r#2\""), "expected #2 node: {dot}");
 
-    // Sub-issue edge: child #2 → parent #1.
+    // Sub-issue nests under its parent: parent → child tree edge
+    // (reversed from the data direction). The child does not also
+    // hang off the cluster header.
     assert!(
-        dot.contains("\"o/r#2\" -> \"o/r#1\""),
-        "expected sub-issue edge: {dot}"
+        dot.contains("\"o/r#1\" -> \"o/r#2\""),
+        "expected parent→child tree edge for sub-issue: {dot}"
+    );
+    assert!(
+        !dot.contains("\"__cluster_uncategorized__\" -> \"o/r#2\""),
+        "child should not also hang off the cluster header: {dot}"
     );
 }
 

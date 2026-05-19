@@ -59,14 +59,24 @@ The rendered DOT is a forest with one root: the project. Issues are leaves; clus
 
 **Tree edges.** `__project__ → __cluster_<key>__` and `__cluster_<key>__ → <issue_id>`. Solid (Graphviz default), no `constraint=false`, no tooltip, no edge label. Implementation note: tree edges precede data edges in the output stream so cross-cluster cycles (an issue-to-issue blocking edge) cannot accidentally pull a node out of its cluster header's rank.
 
+**Sub-issue nesting.** Sub-issue edges promote from data edges to tree edges so children descend from their tracking-issue parent rather than hanging flat off the cluster header. The tree edge is emitted reversed — `parent → child` — so LR layout pulls the child rightward under the parent. The data direction (child → parent, "doing the child enables the parent") is implied by structural position and needs no arrow. Nested children skip the `cluster_header → issue` tree edge to avoid double-parenting.
+
+A SubIssue edge stays as a data edge in two cases:
+
+- **Ghost parent.** Off-board parents shouldn't drag on-board children into an Uncategorized branch. The child stays under its own cluster header and the sub-issue arrow points out to the ghost.
+- **Cluster conflict.** When the child carries an explicit cluster tag different from the parent's, the explicit tag wins — child appears under its own cluster header, sub-issue renders as a data arrow back to the parent. A child with no cluster tag still nests, which is how slice 4 also delivers the "inherit parent's cluster" follow-up implicitly.
+
 **Cluster ordering.** Tied to node sort, same as slice 3. Stable across runs, predictable across commits.
+
+**Uncategorized emission.** Suppressed when every unclustered node nests into someone else's subtree — leaves no empty branch dangling off the project root.
 
 **No subgraph boxes.** Slice 3's `subgraph "cluster_<id>" { ... }` blocks are removed. The grouping is conveyed by the tree edge from cluster header to issue, not by a visual container.
 
 ## Edge conventions
 
 **Style per kind (data edges).**
-- `EdgeKind::SubIssue`, `EdgeKind::Blocks` — `style=solid, constraint=false`, default `color=black`, default `penwidth`.
+- `EdgeKind::SubIssue` — by default promoted to a tree edge (see [Sub-issue nesting](#tree-topology)). Falls back to `style=solid, constraint=false`, default `color=black`, default `penwidth` when the parent is a Ghost or the child carries a conflicting cluster tag.
+- `EdgeKind::Blocks` — `style=solid, constraint=false`, default `color=black`, default `penwidth`.
 - `EdgeKind::CrossReference` — `style=dashed, constraint=false, penwidth=0.7`, plus a per-source color (see below).
 
 **Tree edges (synthetic).** `style=solid`, no `constraint` override (defaults to true). Tree edges are the only edges that influence layout; every data edge is decorative.
