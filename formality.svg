@@ -789,10 +789,10 @@
 <g id="node49" class="node">
 <title>rust&#45;lang/a&#45;mir&#45;formality#292</title>
 <g id="a_node49"><a xlink:href="https://github.com/rust-lang/a-mir-formality/issues/292" xlink:title="Parent tracking issue: #288&#10;&#10;Convert `check_adt` from a regular Rust function to a judgment function.&#10;&#10;Currently it: opens the ADT binder, proves where&#45;clauses are well&#45;formed, and proves each field type is well&#45;formed.&#10;&#10;See the parent tracking issue for context and examples.">
-<path fill="#888888" stroke="#6d6d6d" stroke-width="1.5" d="M601.88,-950.02C601.88,-950.02 404.22,-950.02 404.22,-950.02 398.22,-950.02 392.22,-944.02 392.22,-938.02 392.22,-938.02 392.22,-910 392.22,-910 392.22,-904 398.22,-898 404.22,-898 404.22,-898 601.88,-898 601.88,-898 607.88,-898 613.88,-904 613.88,-910 613.88,-910 613.88,-938.02 613.88,-938.02 613.88,-944.02 607.88,-950.02 601.88,-950.02"/>
-<text xml:space="preserve" text-anchor="middle" x="503.05" y="-933.81" font-family="Helvetica,Arial,sans-serif" font-size="11.00">#292: Convert `check_adt` to a judgment</text>
-<text xml:space="preserve" text-anchor="middle" x="503.05" y="-920.31" font-family="Helvetica,Arial,sans-serif" font-size="11.00">function</text>
-<text xml:space="preserve" text-anchor="middle" x="503.05" y="-906.81" font-family="Helvetica,Arial,sans-serif" font-size="11.00">OPEN</text>
+<path fill="#a05ad9" stroke="#8048ae" stroke-width="1.5" d="M601.88,-950.02C601.88,-950.02 404.22,-950.02 404.22,-950.02 398.22,-950.02 392.22,-944.02 392.22,-938.02 392.22,-938.02 392.22,-910 392.22,-910 392.22,-904 398.22,-898 404.22,-898 404.22,-898 601.88,-898 601.88,-898 607.88,-898 613.88,-904 613.88,-910 613.88,-910 613.88,-938.02 613.88,-938.02 613.88,-944.02 607.88,-950.02 601.88,-950.02"/>
+<text xml:space="preserve" text-anchor="middle" x="503.05" y="-933.81" font-family="Helvetica,Arial,sans-serif" font-size="11.00" fill="white">#292: Convert `check_adt` to a judgment</text>
+<text xml:space="preserve" text-anchor="middle" x="503.05" y="-920.31" font-family="Helvetica,Arial,sans-serif" font-size="11.00" fill="white">function</text>
+<text xml:space="preserve" text-anchor="middle" x="503.05" y="-906.81" font-family="Helvetica,Arial,sans-serif" font-size="11.00" fill="white">OPEN · Jengamon</text>
 </a>
 </g>
 </g>

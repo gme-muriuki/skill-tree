@@ -30,14 +30,10 @@ pub enum GitHubError {
         message: String,
     },
 
-    /// HTTP response with error status code (4xx or 5xx).
+    /// HTTP response with error status code (4xx or 5xx). `body` is
+    /// truncated to a fixed byte budget to bound diagnostics.
     #[error("HTTP {status}: {body}")]
-    HttpError {
-        /// HTTP status code.
-        status: u16,
-        /// Full response body.
-        body: String,
-    },
+    HttpError { status: u16, body: String },
 
     /// GraphQL response contained errors in the `errors` field.
     #[error("GraphQL error: {0}")]

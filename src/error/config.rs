@@ -57,34 +57,21 @@ pub enum ConfigError {
 #[derive(Debug, Clone)]
 pub enum ConfigIssue {
     /// Config references a field name that does not exist on the project.
-    FieldNotFound {
-        /// Which TOML section referenced the missing field
-        /// (e.g. `"colors"`, `"field"`).
-        section: &'static str,
-        /// The name as it appears in `.skill-tree.toml`.
-        name: String,
-    },
-    /// Config references a real field but the field is the wrong kind
-    /// (e.g. `[colors] github-name` pointed at a TEXT field).
+    FieldNotFound { section: &'static str, name: String },
+    /// Config references a real field of the wrong kind (e.g.
+    /// `[colors] github-name` pointed at a TEXT field instead of
+    /// SingleSelect).
     FieldWrongType {
-        /// Which TOML section referenced the field.
         section: &'static str,
-        /// The field name.
         name: String,
-        /// The kind the section requires.
         expected: &'static str,
-        /// The kind GitHub actually reports.
         actual: &'static str,
     },
-    /// Config references a SingleSelect option name that is not on the
-    /// field's option list (typo, or the option was removed in GitHub).
+    /// Config references a SingleSelect option name that is not on
+    /// the field's option list (typo, or the option was removed).
     OptionNotFound {
-        /// Which TOML section listed the option (e.g. `"colors.values"`,
-        /// `"cluster.values"`).
         section: &'static str,
-        /// The field whose options were searched.
         field: String,
-        /// The value name from the TOML table.
         value: String,
     },
 }

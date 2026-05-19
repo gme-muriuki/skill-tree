@@ -3,7 +3,7 @@ source: src/render/mod.rs
 expression: "to_dot(&g, &opts())"
 ---
 digraph SkillTree {
-    rankdir = "LR";
-    graph [fontname="Helvetica,Arial,sans-serif"];
-    node  [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, margin="0.18,0.08", penwidth=1.5];
+rankdir = "LR";
+graph [fontname="Helvetica,Arial,sans-serif"];
+node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, margin="0.18,0.08", penwidth=1.5];
 }

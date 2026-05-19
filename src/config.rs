@@ -123,12 +123,9 @@ pub struct SkillTree {
 }
 
 impl SkillTree {
-    /// The default filename skill-tree looks for.
     pub const CONFIG_FILENAME: &'static str = ".skill-tree.toml";
 
     /// Load config from `.skill-tree.toml` in `dir`.
-    ///
-    /// If the file does not exist, return an error
     pub fn from_dir(dir: impl AsRef<Path>) -> Fallible<Self> {
         let dir = dir.as_ref();
         Self::from_path(dir.join(Self::CONFIG_FILENAME))
@@ -166,7 +163,10 @@ impl SkillTree {
 
         config.validate()?;
 
-        let config_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let config_dir = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
 
         Ok(Self { config, config_dir })
     }

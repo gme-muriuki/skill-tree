@@ -1,17 +1,21 @@
 [github]
 owner   = "rust-lang"
-project = 68
+project = 59
 
 [colors]
 github-name = "Status"
 [colors.values]
-"Needs triage"    = "#888888"
-"Good first item" = "#d9b04a"
-"Good Nth item"   = "#d97a4a"
-"Assigned"        = "#4a90d9"
-"Has PR"          = "#a05ad9"
-"Deferred"        = "#bbbbbb"
-"Done"            = "#57a85a"
+"To Do"       = "#888888"
+"Can Do"      = "#d9b04a"
+"In Progress" = "#4a90d9"
+"Done"        = "#57a85a"
+"Fixed By"    = "#a05ad9"
+"Abandoned"   = "#bbbbbb"
 
 [cluster]
-github-name = "Category"
+github-name = "Priority"
+[cluster.values]
+"P-critical" = "Critical"
+"P-high"     = "High"
+"P-medium"   = "Medium"
+"P-low"      = "Low"

@@ -10,6 +10,13 @@ use regex::Regex;
 /// Maximum char count of the cleaned tooltip body before truncation.
 pub(super) const BODY_TOOLTIP_LIMIT: usize = 400;
 
+/// Hard byte cap applied to the *raw* body before the regex pipeline
+/// runs. The final tooltip is much shorter ([`BODY_TOOLTIP_LIMIT`]
+/// chars), but a hostile issue body of arbitrary size would otherwise
+/// drive `replace_all` over the entire input before truncation. 8 KiB
+/// fits every realistic issue body with margin.
+const RAW_BODY_MAX_BYTES: usize = 8 * 1024;
+
 static HTML_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
 static CODE_FENCE_LINE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^[ \t]*```.*$").unwrap());
@@ -25,6 +32,7 @@ static MULTI_NEWLINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").u
 /// Run the full cleanup pipeline and truncate at the nearest sentence
 /// boundary before `limit` chars.
 pub(super) fn clean_body(raw: &str, limit: usize) -> String {
+    let raw = clip_to_byte_budget(raw, RAW_BODY_MAX_BYTES);
     let s = HTML_COMMENT.replace_all(raw, "");
     let s = CODE_FENCE_LINE.replace_all(&s, "");
     let s = BOLD_STAR.replace_all(&s, "$1");
@@ -35,6 +43,18 @@ pub(super) fn clean_body(raw: &str, limit: usize) -> String {
     let s = s.replace("\r\n", "\n").replace('\r', "\n");
     let s = MULTI_NEWLINE.replace_all(&s, "\n\n");
     truncate_at_sentence(s.trim(), limit)
+}
+
+/// Trim `s` to at most `budget` bytes at a UTF-8 char boundary.
+fn clip_to_byte_budget(s: &str, budget: usize) -> &str {
+    if s.len() <= budget {
+        return s;
+    }
+    let mut cut = budget;
+    while !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &s[..cut]
 }
 
 /// Truncate at the last sentence boundary (`. `, `! `, `? `, or
