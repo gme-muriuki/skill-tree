@@ -75,18 +75,27 @@ pub struct GitHubClient {
     timeout: Duration,
 }
 
+// Compile-time guard for the retry-loop invariant in `query()`.
+const _: () = assert!(GitHubClient::MAX_ATTEMPTS >= 1);
+
 impl GitHubClient {
     const DEFAULT_ENDPOINT: &'static str = "https://api.github.com/graphql";
     const API_VERSION: &'static str = "2022-11-28";
 
     /// Maximum number of HTTP requests per `query()` call: one initial
-    /// attempt plus `MAX_ATTEMPTS - 1` retries.
+    /// attempt plus `MAX_ATTEMPTS - 1` retries. Must be ≥ 1; the retry
+    /// loop's `unreachable!` exit relies on this.
     const MAX_ATTEMPTS: u32 = 3;
 
     /// Wait used when GitHub returns a 429 with no parseable
     /// `X-RateLimit-Reset` header. One minute is GitHub's documented
     /// minimum reset window for secondary rate limits.
     const RATE_LIMIT_FALLBACK_SECS: u64 = 60;
+
+    /// Ceiling on `X-RateLimit-Reset` waits. Guards against client
+    /// clock skew — without it, a misconfigured clock would translate
+    /// to an hour-long stall.
+    const RATE_LIMIT_MAX_WAIT_SECS: u64 = 600;
 
     /// Create a new client targeting `https://api.github.com/graphql`,
     /// reading the token from the parameter or the `GITHUB_TOKEN` env var.
@@ -186,8 +195,6 @@ impl GitHubClient {
             return Err(err);
         }
 
-        // Loop body always returns or `continue`s on attempts < MAX_ATTEMPTS,
-        // and always returns on attempt == MAX_ATTEMPTS.
         unreachable!("retry loop exited without returning")
     }
 
@@ -234,9 +241,10 @@ impl GitHubClient {
                         Some(reset_time.saturating_sub(now))
                     });
 
-                return Err(GitHubError::RateLimited {
-                    retry_after: retry_after.unwrap_or(Self::RATE_LIMIT_FALLBACK_SECS),
-                });
+                let wait = retry_after
+                    .unwrap_or(Self::RATE_LIMIT_FALLBACK_SECS)
+                    .min(Self::RATE_LIMIT_MAX_WAIT_SECS);
+                return Err(GitHubError::RateLimited { retry_after: wait });
             }
 
             let body = response
@@ -245,7 +253,7 @@ impl GitHubClient {
                 .unwrap_or_else(|e| format!("<failed to read body: {e}>"));
             return Err(GitHubError::HttpError {
                 status: status.as_u16(),
-                body,
+                body: truncate_error_body(body),
             });
         }
 
@@ -309,19 +317,37 @@ impl GitHubClient {
         }
     }
 
+    /// Maximum bytes of an HTTP error body included in
+    /// [`GitHubError::HttpError`]. GitHub's error responses are short;
+    /// the cap guards against odd proxy responses that echo request
+    /// headers (potentially including the bearer token) verbatim.
+    const ERROR_BODY_MAX_BYTES: usize = 4096;
+
     /// Delay before retry, with ±20% jitter to avoid thundering herd.
     /// Called after a failed `attempt` when more retries remain, so for
     /// `MAX_ATTEMPTS = 3` the inputs are 1 (~1s) and 2 (~2s).
     fn backoff_duration(attempt: u32) -> Duration {
+        use rand::RngExt as _;
         let base_millis = 1000_u64 * 2_u64.pow(attempt - 1);
-        let jitter_pct = rand::random::<u64>() % 21; // 0..=20
-        let signed = if rand::random::<bool>() {
-            base_millis + base_millis * jitter_pct / 100
-        } else {
-            base_millis - base_millis * jitter_pct / 100
-        };
-        Duration::from_millis(signed)
+        let jitter_pct: i64 = rand::rng().random_range(-20..=20);
+        let delta = (base_millis as i64) * jitter_pct / 100;
+        Duration::from_millis((base_millis as i64 + delta).max(0) as u64)
     }
+}
+
+/// Truncate an HTTP error body to [`GitHubClient::ERROR_BODY_MAX_BYTES`]
+/// at a UTF-8 character boundary, appending a `…[truncated]` marker.
+fn truncate_error_body(mut body: String) -> String {
+    if body.len() <= GitHubClient::ERROR_BODY_MAX_BYTES {
+        return body;
+    }
+    let mut cut = GitHubClient::ERROR_BODY_MAX_BYTES;
+    while !body.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    body.truncate(cut);
+    body.push_str("…[truncated]");
+    body
 }
 
 #[cfg(test)]

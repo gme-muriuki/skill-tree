@@ -29,15 +29,22 @@ pub fn dot_to_svg(dot_input: &str) -> Result<Vec<u8>, RenderError> {
             }
         })?;
 
-    // `stdin` is `Some` because we set `Stdio::piped()` above.
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin was piped")
-        .write_all(dot_input.as_bytes())
-        .map_err(RenderError::DotSpawn)?;
+    // Write stdin from a dedicated thread and drop the handle when done.
+    // Doing it inline before `wait_with_output` deadlocks on Windows
+    // (pipe buffer ~4 KiB): `dot` blocks writing to stderr while we
+    // block writing to stdin.
+    let mut stdin = child.stdin.take().expect("stdin was piped");
+    let input = dot_input.to_owned();
+    let writer = std::thread::spawn(move || -> std::io::Result<()> {
+        stdin.write_all(input.as_bytes())?;
+        Ok(())
+    });
 
     let output = child.wait_with_output().map_err(RenderError::DotSpawn)?;
+    writer
+        .join()
+        .expect("stdin writer thread panicked")
+        .map_err(RenderError::DotSpawn)?;
 
     if !output.status.success() {
         return Err(RenderError::DotFailed {

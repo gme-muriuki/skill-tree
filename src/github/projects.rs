@@ -615,7 +615,6 @@ const FETCH_PROJECT_ITEMS_QUERY: &str = r#"
     }
 "#;
 
-/// Items returned per request to GitHub. GitHub allows up to 100 per page.
 const ITEMS_PER_PAGE: u32 = 100;
 
 #[derive(Serialize)]

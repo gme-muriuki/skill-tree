@@ -464,17 +464,13 @@ fn issue_node_id(repository: &RepositoryRef, number: u64) -> Option<NodeId> {
     })
 }
 
-fn ghost_node(id: NodeId) -> Node {
-    let (owner, repo, number) = match &id {
-        NodeId::Ghost {
-            owner,
-            repo,
-            number,
-        } => (owner.as_str(), repo.as_str(), *number),
-        _ => unreachable!("ghost_node called with non-Ghost id"),
-    };
+fn ghost_node(owner: &str, repo: &str, number: u64) -> Node {
     Node {
-        id: id.clone(),
+        id: NodeId::Ghost {
+            owner: owner.to_owned(),
+            repo: repo.to_owned(),
+            number,
+        },
         kind: NodeKind::Ghost,
         label: format!("{owner}/{repo}#{number}"),
         url: Some(format!("https://github.com/{owner}/{repo}/issues/{number}")),
@@ -499,22 +495,22 @@ fn resolve_endpoint(
     if on_board.contains(&issue_id) {
         return issue_id;
     }
+    // `issue_node_id` only produces `NodeId::Issue`; defensive.
     let NodeId::Issue {
         owner,
         repo,
         number,
     } = issue_id
     else {
-        // `issue_node_id` only produces `NodeId::Issue`; defensive.
         return issue_id;
     };
     let ghost_id = NodeId::Ghost {
-        owner,
-        repo,
+        owner: owner.clone(),
+        repo: repo.clone(),
         number,
     };
     if node_set.insert(ghost_id.clone()) {
-        nodes.push(ghost_node(ghost_id.clone()));
+        nodes.push(ghost_node(&owner, &repo, number));
     }
     ghost_id
 }
