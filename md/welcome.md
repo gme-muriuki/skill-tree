@@ -51,7 +51,7 @@ cargo test -- --nocapture
 
 ## Code style
 
-Follow Niko's patterns from the codebase:
+Follow the established patterns from the codebase:
 
 - Comments explain the "why", not the "what"
 - Code is self-documenting; avoid redundant comments

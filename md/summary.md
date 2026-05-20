@@ -23,6 +23,7 @@
 - [Graph build](./design/graph-build.md)
 - [Render](./design/render.md)
 - [Node display](./design/node-display.md)
+- [See-also edges](./design/see-also.md)
 
 # Contribution guide
 
