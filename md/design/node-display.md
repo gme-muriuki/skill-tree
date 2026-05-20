@@ -9,7 +9,7 @@ Information is reachable from at least one of label / tooltip / click-through. N
 
 ## Label format
 
-Plain DOT labels (not HTML-like). Plain labels serialize cleanly into draw.io for [[project-lcnr-use-cases|lcnr's editing workflow]] and avoid a second escape path on top of the existing DOT string rules.
+Plain DOT labels (not HTML-like). Plain labels serialize cleanly into draw.io for the SVG-editing workflow and avoid a second escape path on top of the existing DOT string rules.
 
 ```
 #289: Convert check_trait to a
@@ -26,7 +26,7 @@ OPEN · JojoFlex1
 
 ## Tooltip format
 
-The tooltip is the cleaned issue body, nothing else. State and assignees already appear in the label, so the tooltip does not repeat them. This honors [[project-lcnr-use-cases|lcnr's request]] for hover-accessible state/assignees/body: state and assignees are reachable without hovering at all, body is reachable on hover.
+The tooltip is the cleaned issue body, nothing else. State and assignees already appear in the label, so the tooltip does not repeat them. State and assignees are reachable without hovering at all; body is reachable on hover.
 
 The cleanup pipeline (Tier 2) operates on the raw body before truncation:
 
