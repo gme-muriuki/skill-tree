@@ -62,7 +62,7 @@ pub struct Edge {
     pub target: NodeId,
 }
 
-pub enum EdgeKind { SubIssue, Blocks, CrossReference }
+pub enum EdgeKind { SubIssue, Blocks, CrossReference, SeeAlso }
 ```
 
 Both vectors are sorted at build time. Render walks them in stored order; `Graph` is byte-stable for fixed inputs. Adjacency lookups for `validate` and `unblocked` are derived on demand — the value type carries no redundant indices.
@@ -72,11 +72,13 @@ Both vectors are sorted at build time. Render walks them in stored order; `Graph
 `from_fetch` applies, in order:
 
 1. **Node materialization.** Every `ProjectItem` becomes one node by identity. Redacted items become `NodeId::Redacted`; drafts become `Draft`; issues and PRs become `Issue`. A sub-issue that also appears as its own project item resolves to one node, not two.
-2. **On-board set.** A `HashSet<NodeId>` over the materialized nodes, consulted for every endpoint check below.
-3. **Sub-issue edges.** Walk `IssueContent.sub_issues.nodes` for each Issue node. Off-board targets become **ghost nodes** (added to the node set) per [node model](./node-model.md). Self-edges produce `BuildError::SelfEdge`.
-4. **Blocking edges.** Walk `RawIssueEdges.issues[].blocking` per source issue. Off-board targets become ghost nodes. Self-edges error.
-5. **Cross-reference edges.** Walk `RawIssueEdges.issues[].cross_references` per target issue. **Both endpoints must be on board** — off-board sources drop silently per [edge convention](./edge-convention.md). Self-edges error. `[edges.cross-ref] require-labels` is permissive: an empty list (the default) includes every cross-reference; a non-empty list narrows to sources whose inlined `labels` contain at least one listed name (exact match).
-6. **Sort.** `nodes` by `Ord`; `edges` walked by source in node order, then by `(kind, target)`.
+2. **Body front-matter parse.** Each `NodeId::Issue` body is run through `graph::see_also::parse`. The metadata pipe-table is stripped from `Node.body` (so it never reaches the tooltip); recognised `See also` rows are stashed for step 5b below. Malformed rows print one `eprintln!` per row to stderr. See [see-also edges](./see-also.md).
+3. **On-board set.** A `HashSet<NodeId>` over the materialized nodes, consulted for every endpoint check below.
+4. **Sub-issue edges.** Walk `IssueContent.sub_issues.nodes` for each Issue node. Off-board targets become **ghost nodes** (added to the node set) per [node model](./node-model.md). Self-edges produce `BuildError::SelfEdge`.
+5. **Blocking edges.** Walk `RawIssueEdges.issues[].blocking` per source issue. Off-board targets become ghost nodes. Self-edges error.
+5b. **See-also edges.** Drain the targets stashed in step 2. Off-board targets become ghost nodes, matching the sub-issue and blocking convention. Self-edges error.
+6. **Cross-reference edges.** Walk `RawIssueEdges.issues[].cross_references` per target issue. **Both endpoints must be on board** — off-board sources drop silently per [edge convention](./edge-convention.md). Self-edges error. `[edges.cross-ref] require-labels` is permissive: an empty list (the default) includes every cross-reference; a non-empty list narrows to sources whose inlined `labels` contain at least one listed name (exact match).
+7. **Sort.** `nodes` by `Ord`; `edges` walked by source in node order, then by `(kind, target)`.
 
 ## Errors
 
@@ -94,10 +96,10 @@ pub struct CycleReport {
 `BuildError` is small on purpose:
 
 - **Duplicate `NodeId`** is not modeled. Items normalize by identity; a duplicate from GitHub would be a fetch-layer bug, not a config bug.
-- **Dangling targets** are not modeled. Off-board endpoints become ghost nodes (for `SubIssue` and `Blocks`) or drop silently (for `CrossReference`). An unrepresentable reference — e.g. GitHub returned a target with no parseable number — is a parse failure surfaced by `github/issues.rs` as `GitHubError`, not by `from_fetch`.
+- **Dangling targets** are not modeled. Off-board endpoints become ghost nodes (for `SubIssue`, `Blocks`, and `SeeAlso`) or drop silently (for `CrossReference`). An unrepresentable reference — e.g. GitHub returned a target with no parseable number — is a parse failure surfaced by `github/issues.rs` as `GitHubError`, not by `from_fetch`.
 
 ## Validation
 
-`Graph::validate` runs an iterative DFS over `SubIssue` and `Blocks` edges only. **Cross-references are excluded from cycle detection**: bidirectional cross-refs are normal on real GitHub boards (A mentions #B, B mentions #A) and the render layer already treats cross-refs as decorative via `constraint=false`. Including them would reject benign boards as cyclic. A `SubIssue → Blocks → SubIssue → ...` round-trip is still a cycle; a path closed by a CrossReference edge is not. The first detected back-edge produces a `CycleReport` containing the path from the back-edge target through the active DFS stack and back. Subcommands run validate after build; render aborts non-zero before emission.
+`Graph::validate` runs an iterative DFS over `SubIssue` and `Blocks` edges only. **Cross-references and see-also edges are excluded from cycle detection**: both are decorative pointers, not dependency relationships, and the render layer already treats them as decorative via `constraint=false`. Including them would reject benign boards as cyclic. A `SubIssue → Blocks → SubIssue → ...` round-trip is still a cycle; a path closed by a `CrossReference` or `SeeAlso` edge is not. The first detected back-edge produces a `CycleReport` containing the path from the back-edge target through the active DFS stack and back. Subcommands run validate after build; render aborts non-zero before emission.
 
 The `validate` subcommand prints the cycle path; finding *all* simple cycles (Johnson's algorithm) is deferred to a future flag if real boards demand it.

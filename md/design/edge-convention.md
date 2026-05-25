@@ -4,7 +4,7 @@ skill-tree's purpose is to visualize dependencies between issues. This document 
 
 ## Edge sources
 
-Three GitHub-native relationships produce graph edges. All three are queryable as structured data — no body parsing.
+Three GitHub-native relationships plus one body-authored relationship produce graph edges.
 
 **Sub-issue** — from `Issue.subIssues.nodes`. Direction: child → parent ("doing the child enables the parent").
 
@@ -12,16 +12,19 @@ Three GitHub-native relationships produce graph edges. All three are queryable a
 
 **Cross-reference** — a `CROSS_REFERENCED_EVENT` timeline item recording that issue A's body, comment, or PR description mentioned issue B with `#<number>` syntax. From `Issue.timelineItems(itemTypes: CROSS_REFERENCED_EVENT)`. Direction: mentioner → mentioned.
 
-Blocking and cross-reference data both live on the Issue, not on the project item, so they are fetched together by `github/issues.rs` as a second pass after the items query (see [issue edges](./issue-edges.md)). Sub-issues come back inline with the items query (see [project fetching](./project-fetch.md)).
+**See-also** — a `See also` row in the front-matter metadata table at the top of an issue body. Author-opt-in soft pointer with no native GitHub representation; see [see-also edges](./see-also.md). Direction: referrer → referenced.
+
+Blocking and cross-reference data both live on the Issue, not on the project item, so they are fetched together by `github/issues.rs` as a second pass after the items query (see [issue edges](./issue-edges.md)). Sub-issues come back inline with the items query (see [project fetching](./project-fetch.md)). See-also rows are extracted from the issue body during graph build.
 
 ## Edge styles
 
 Style is determined by edge kind:
 
 - **Solid** — sub-issue and blocking. GitHub's structured hard dependencies.
-- **Dashed** — cross-reference. A softer signal: "A talks about B" without claiming B is a prerequisite.
+- **Dashed, directional** — cross-reference. A softer signal: "A talks about B" without claiming B is a prerequisite. Per-source palette color for visual grouping.
+- **Dashed, arrowless (`dir=none`)** — see-also. Author-opt-in soft pointer, drawn in neutral gray.
 
-Both styles render by default. No configuration is required to get the basic mix.
+All styles render by default. No configuration is required to get the basic mix.
 
 ## Filtering cross-references
 
@@ -33,7 +36,7 @@ Every PR that mentions an issue creates a `CROSS_REFERENCED_EVENT`. Without filt
 
 ## Edge identity
 
-Every edge in the model carries its kind tag — `SubIssue`, `Blocks`, or `CrossReference`. The render layer uses the tag to apply visual style. Future variants (e.g., a label-based "depends-on" convention) extend the enum without re-fetching.
+Every edge in the model carries its kind tag — `SubIssue`, `Blocks`, `CrossReference`, or `SeeAlso`. The render layer uses the tag to apply visual style. Future variants extend the enum without re-fetching.
 
 Edges emit in deterministic order: walked by source node in node-sort order (see [node-model.md](./node-model.md)), then within each source by `(kind, target)`.
 
@@ -41,7 +44,9 @@ Edges emit in deterministic order: walked by source node in node-sort order (see
 
 **Cycles** — a path `A → B → ... → A` is a hard error. skill-tree reports the cycle path and exits non-zero. Cycles are almost always data bugs.
 
-**Self-edges** — an issue listed as its own sub-issue, blocker, or cross-reference is rejected at validation.
+**Self-edges** — an issue listed as its own sub-issue, blocker, cross-reference, or see-also target is rejected at validation.
+
+**Cycle exclusions** — cross-reference and see-also edges are skipped by the cycle detector: both are decorative pointers, not dependency relationships.
 
 **Off-board endpoints** — when an edge points at an issue not on the project board, the endpoint becomes a ghost node (see [node-model.md](./node-model.md)). The edge still renders.
 

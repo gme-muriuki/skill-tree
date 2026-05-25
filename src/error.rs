@@ -15,9 +15,11 @@ pub mod config;
 pub mod github;
 pub mod graph;
 pub mod render;
+pub mod see_also;
 
 pub use cli::CliError;
 pub use config::{ConfigError, ConfigIssue};
 pub use github::{GitHubError, NetworkErrorKind};
 pub use graph::{BuildError, CycleReport};
 pub use render::RenderError;
+pub use see_also::SeeAlsoWarning;
