@@ -6,12 +6,13 @@
 //! ghost nodes or were dropped — every edge in the input has both
 //! endpoints in `Graph.nodes`.
 //!
-//! **Cross-references are excluded from cycle detection.** GitHub
-//! cross-references are commonly bidirectional (A mentions #B, B
-//! mentions #A) and the render layer already treats them as decorative
-//! via `constraint=false` — they do not represent a dependency
-//! relationship. Including them here would reject perfectly fine boards
-//! as cyclic.
+//! **Cross-references and see-also edges are excluded from cycle
+//! detection.** Both are decorative pointers, not dependency
+//! relationships: GitHub cross-references are commonly bidirectional
+//! (A mentions #B, B mentions #A); `See also` rows in issue bodies
+//! intentionally signal soft relevance. The render layer treats both
+//! via `constraint=false`. Including them here would reject
+//! perfectly fine boards as cyclic.
 //!
 //! Strategy: classic three-colour DFS with parent pointers, walked from
 //! each `Graph.nodes` entry in stored (sorted) order. The first
@@ -44,11 +45,11 @@ impl Graph {
     pub fn validate(&self) -> Result<(), CycleReport> {
         // Adjacency: source NodeId -> Vec<(EdgeKind, target NodeId)>. Edges
         // are already sorted by (source, kind, target), so each list is
-        // built in deterministic order. CrossReference edges are skipped
-        // — see module doc.
+        // built in deterministic order. CrossReference and SeeAlso edges
+        // are skipped — see module doc.
         let mut adjacency: HashMap<&NodeId, Vec<(EdgeKind, &NodeId)>> = HashMap::new();
         for edge in &self.edges {
-            if matches!(edge.kind, EdgeKind::CrossReference) {
+            if matches!(edge.kind, EdgeKind::CrossReference | EdgeKind::SeeAlso) {
                 continue;
             }
             adjacency
@@ -293,6 +294,18 @@ mod tests {
             report.kinds,
             vec![EdgeKind::SubIssue, EdgeKind::Blocks, EdgeKind::Blocks]
         );
+    }
+
+    #[test]
+    fn bidirectional_see_also_is_not_a_cycle() {
+        let g = graph_with(
+            vec![iss("o", "r", 1), iss("o", "r", 2)],
+            vec![
+                edge(EdgeKind::SeeAlso, iss("o", "r", 1), iss("o", "r", 2)),
+                edge(EdgeKind::SeeAlso, iss("o", "r", 2), iss("o", "r", 1)),
+            ],
+        );
+        assert!(g.validate().is_ok());
     }
 
     #[test]

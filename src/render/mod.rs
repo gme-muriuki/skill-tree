@@ -399,6 +399,7 @@ fn emit_data_edges(out: &mut String, edges: &[Edge], nested_children: &HashSet<&
                 let symmetric = cross_ref_dirs.contains(&(hi, lo));
                 emit_cross_ref_edge(out, lo, hi, symmetric);
             }
+            EdgeKind::SeeAlso => emit_see_also_edge(out, edge),
         }
     }
 }
@@ -410,6 +411,7 @@ fn emit_solid_edge(out: &mut String, edge: &Edge) {
         EdgeKind::SubIssue => "sub-issue",
         EdgeKind::Blocks => "blocks",
         EdgeKind::CrossReference => unreachable!("cross-refs go through emit_cross_ref_edge"),
+        EdgeKind::SeeAlso => unreachable!("see-also goes through emit_see_also_edge"),
     };
     let tooltip = format!("{kind_name}: {source_str} → {target_str}");
     writeln!(
@@ -442,6 +444,22 @@ fn emit_cross_ref_edge(out: &mut String, source: &NodeId, target: &NodeId, symme
         dir_attr,
         quote(color),
         quote(&tooltip),
+    )
+    .unwrap();
+}
+
+/// `See also` edges from issue body front-matter. Dashed gray, arrowless
+/// (`dir=none`) — distinguishes the author-opt-in soft pointer from the
+/// auto-generated cross-reference, which keeps a directional arrowhead.
+fn emit_see_also_edge(out: &mut String, edge: &Edge) {
+    let source_str = edge.source.to_string();
+    let target_str = edge.target.to_string();
+    writeln!(
+        out,
+        "{} -> {} [style=dashed, constraint=false, penwidth=0.7, dir=none, color=\"#888888\", tooltip={}];",
+        quote(&source_str),
+        quote(&target_str),
+        quote("see also"),
     )
     .unwrap();
 }

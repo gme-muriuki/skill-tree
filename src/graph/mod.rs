@@ -13,6 +13,7 @@ use crate::error::BuildError;
 use crate::github::issues::{CrossReferenceSource, RawIssueEdges};
 use crate::github::projects::{ItemContent, ProjectFetch, ProjectItem, RepositoryRef};
 
+mod see_also;
 mod validate;
 
 // ---------------------------------------------------------------------------
@@ -156,6 +157,9 @@ pub enum EdgeKind {
     /// `mentioner → mentioned` from `Issue.timelineItems` filtered to
     /// `CROSS_REFERENCED_EVENT`.
     CrossReference,
+    /// `referrer → referenced` from a `See also` row in the issue body
+    /// front-matter table. See `md/design/see-also.md`.
+    SeeAlso,
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +220,29 @@ impl Graph {
             nodes.push(node);
         }
 
+        // Step 1.5: parse front-matter metadata tables from each issue
+        // body. The table is stripped from `Node.body` so it never reaches
+        // the tooltip; each issue's `See also` targets are stashed for
+        // step 4.5 below. See `md/design/see-also.md`.
+        let mut see_also_pairs: Vec<(NodeId, Vec<see_also::SeeAlsoTarget>)> = Vec::new();
+        for node in nodes.iter_mut() {
+            let (owner, repo) = match &node.id {
+                NodeId::Issue { owner, repo, .. } => (owner.clone(), repo.clone()),
+                _ => continue,
+            };
+            let Some(body) = node.body.take() else {
+                continue;
+            };
+            let parsed = see_also::parse(&body, &owner, &repo);
+            for w in &parsed.warnings {
+                eprintln!("see-also in {}: {w}", node.id);
+            }
+            node.body = Some(parsed.rest);
+            if !parsed.targets.is_empty() {
+                see_also_pairs.push((node.id.clone(), parsed.targets));
+            }
+        }
+
         // Step 2: on-board snapshot — frozen before any ghosts get added.
         let on_board: HashSet<NodeId> = node_set.clone();
 
@@ -271,6 +298,32 @@ impl Graph {
                     kind: EdgeKind::Blocks,
                     source: blocker_endpoint,
                     target: blocked_id.clone(),
+                });
+            }
+        }
+
+        // Step 4.5: see-also edges (referrer → referenced). Off-board
+        // endpoints become ghosts, matching the sub-issue and blocking
+        // convention. See `md/design/see-also.md`.
+        for (source_id, targets) in &see_also_pairs {
+            for t in targets {
+                let target_issue_id = NodeId::Issue {
+                    owner: t.owner.clone(),
+                    repo: t.repo.clone(),
+                    number: t.number,
+                };
+                if &target_issue_id == source_id {
+                    return Err(BuildError::SelfEdge {
+                        node: target_issue_id,
+                        kind: EdgeKind::SeeAlso,
+                    });
+                }
+                let target_endpoint =
+                    resolve_endpoint(target_issue_id, &on_board, &mut nodes, &mut node_set);
+                edges_out.push(Edge {
+                    kind: EdgeKind::SeeAlso,
+                    source: source_id.clone(),
+                    target: target_endpoint,
                 });
             }
         }
@@ -1150,5 +1203,165 @@ mod tests {
         let graph = Graph::from_fetch(project(vec![item]), empty_edges(), &cfg).unwrap();
         assert_eq!(graph.nodes[0].status.as_deref(), Some("In Progress"));
         assert_eq!(graph.nodes[0].cluster.as_deref(), Some("compiler-frontend"));
+    }
+
+    // -- Step 1.5 / 4.5: see-also edges ----------------------------------------
+
+    fn issue_with_body(
+        gh_id: &str,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        body: &str,
+    ) -> ProjectItem {
+        let mut c = issue_content(gh_id, owner, repo, number, "title", vec![]);
+        c.body = body.into();
+        issue_item(c)
+    }
+
+    #[test]
+    fn see_also_edge_when_both_endpoints_on_board() {
+        let a = issue_with_body("I_1", "o", "r", 1, "| See also | #2 |\n");
+        let b = issue_item(issue_content("I_2", "o", "r", 2, "b", vec![]));
+        let graph = Graph::from_fetch(
+            project(vec![a, b]),
+            empty_edges(),
+            &config_with_cross_ref_labels(&[]),
+        )
+        .unwrap();
+        let see_also: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::SeeAlso)
+            .collect();
+        assert_eq!(see_also.len(), 1);
+        assert_eq!(see_also[0].source, issue("o", "r", 1));
+        assert_eq!(see_also[0].target, issue("o", "r", 2));
+    }
+
+    #[test]
+    fn see_also_off_board_target_becomes_ghost() {
+        let a = issue_with_body("I_1", "o", "r", 1, "| See also | other/repo#9 |\n");
+        let graph = Graph::from_fetch(
+            project(vec![a]),
+            empty_edges(),
+            &config_with_cross_ref_labels(&[]),
+        )
+        .unwrap();
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.id == ghost("other", "repo", 9))
+        );
+        let see_also: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::SeeAlso)
+            .collect();
+        assert_eq!(see_also.len(), 1);
+        assert_eq!(see_also[0].target, ghost("other", "repo", 9));
+    }
+
+    #[test]
+    fn see_also_relative_ref_resolves_to_origin_repo() {
+        let a = issue_with_body("I_1", "rust-lang", "rust", 1, "| See also | #2 |\n");
+        let b = issue_item(issue_content("I_2", "rust-lang", "rust", 2, "b", vec![]));
+        let graph = Graph::from_fetch(
+            project(vec![a, b]),
+            empty_edges(),
+            &config_with_cross_ref_labels(&[]),
+        )
+        .unwrap();
+        let see_also: &Edge = graph
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::SeeAlso)
+            .expect("see-also edge");
+        assert_eq!(see_also.source, issue("rust-lang", "rust", 1));
+        assert_eq!(see_also.target, issue("rust-lang", "rust", 2));
+    }
+
+    #[test]
+    fn self_see_also_edge_returns_error() {
+        let a = issue_with_body("I_1", "o", "r", 1, "| See also | #1 |\n");
+        let err = Graph::from_fetch(
+            project(vec![a]),
+            empty_edges(),
+            &config_with_cross_ref_labels(&[]),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            BuildError::SelfEdge {
+                kind: EdgeKind::SeeAlso,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn see_also_metadata_table_stripped_from_node_body() {
+        let body = "| See also | #2 |\n\nIssue prose here.\n";
+        let a = issue_with_body("I_1", "o", "r", 1, body);
+        let graph = Graph::from_fetch(
+            project(vec![a]),
+            empty_edges(),
+            &config_with_cross_ref_labels(&[]),
+        )
+        .unwrap();
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == issue("o", "r", 1))
+            .unwrap();
+        assert_eq!(node.body.as_deref(), Some("\nIssue prose here.\n"));
+    }
+
+    #[test]
+    fn draft_with_see_also_in_body_yields_no_edge() {
+        // Drafts have no Issue NodeId and no public URL; see-also rows in
+        // a draft body must not produce edges.
+        let mut d = draft_item("DI_1", "drafty");
+        if let ItemContent::DraftIssue(ref mut c) = d.content {
+            c.body = "| See also | #2 |\n".into();
+        }
+        let graph = Graph::from_fetch(
+            project(vec![d]),
+            empty_edges(),
+            &config_with_cross_ref_labels(&[]),
+        )
+        .unwrap();
+        assert!(graph.edges.iter().all(|e| e.kind != EdgeKind::SeeAlso));
+    }
+
+    #[test]
+    fn final_sort_orders_see_also_after_cross_reference_on_same_source() {
+        // EdgeKind ordering: SubIssue < Blocks < CrossReference < SeeAlso.
+        let a = issue_with_body("I_1", "o", "r", 1, "| See also | #2 |\n");
+        let b = issue_item(issue_content("I_2", "o", "r", 2, "b", vec![]));
+        let edges = RawIssueEdges {
+            issues: vec![issue_edge_record(
+                "I_1",
+                vec![],
+                vec![cross_ref_source("o", "r", 2, &[])],
+            )],
+        };
+        let graph = Graph::from_fetch(
+            project(vec![a, b]),
+            edges,
+            &config_with_cross_ref_labels(&[]),
+        )
+        .unwrap();
+        let kinds_from_1: Vec<EdgeKind> = graph
+            .edges
+            .iter()
+            .filter(|e| e.source == issue("o", "r", 1))
+            .map(|e| e.kind)
+            .collect();
+        assert!(
+            kinds_from_1.windows(2).all(|w| w[0] <= w[1]),
+            "edges from o/r#1 should be sorted by kind: {kinds_from_1:?}"
+        );
     }
 }
