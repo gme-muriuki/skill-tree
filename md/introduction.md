@@ -9,6 +9,7 @@ node is a GitHub issue and each edge is a blocking relationship.
 
 ```bash
 skill-tree render --format svg --output graph.svg
+skill-tree embed --output graph.html
 skill-tree unblocked
 skill-tree validate
 ```

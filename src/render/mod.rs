@@ -4,10 +4,12 @@
 //! tooltip, and styling decisions live in `md/design/node-display.md`.
 
 mod body;
+mod html;
 mod label;
 mod style;
 mod svg;
 
+pub use html::{Shape, to_html};
 pub use svg::dot_to_svg;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
