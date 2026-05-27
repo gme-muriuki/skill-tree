@@ -60,6 +60,24 @@ pub async fn render_to_bytes(
     config: &Config,
     args: &RenderArgs,
 ) -> Result<Vec<u8>, CliError> {
+    let (graph, project_title) = fetch_graph(client, config).await?;
+    let opts = build_render_opts(config, Some(project_title));
+    let dot = to_dot(&graph, &opts);
+
+    match resolve_format(args.format, args.output.as_deref()) {
+        Format::Dot => Ok(dot.into_bytes()),
+        Format::Svg => Ok(dot_to_svg(&dot)?),
+    }
+}
+
+/// Shared fetch → build → validate half of the pipeline, used by both
+/// `render` and `embed`. Returns the validated graph plus the project
+/// title (the synthetic render root / embed page heading). Pagination,
+/// edge fetching, and cycle validation all happen here.
+pub(crate) async fn fetch_graph(
+    client: &GitHubClient,
+    config: &Config,
+) -> Result<(Graph, String), CliError> {
     let project = fetch_project(client, config).await?;
 
     // Only Issue IDs go to fetch_issue_edges — the query filters at
@@ -82,16 +100,10 @@ pub async fn render_to_bytes(
     let graph = Graph::from_fetch(project, edges, config)?;
     graph.validate()?;
 
-    let opts = build_render_opts(config, Some(project_title));
-    let dot = to_dot(&graph, &opts);
-
-    match resolve_format(args.format, args.output.as_deref()) {
-        Format::Dot => Ok(dot.into_bytes()),
-        Format::Svg => Ok(dot_to_svg(&dot)?),
-    }
+    Ok((graph, project_title))
 }
 
-fn load_config(config_flag: Option<&Path>) -> Result<SkillTree, CliError> {
+pub(crate) fn load_config(config_flag: Option<&Path>) -> Result<SkillTree, CliError> {
     match config_flag {
         Some(path) => Ok(SkillTree::from_path(path)?),
         None => {
@@ -101,7 +113,7 @@ fn load_config(config_flag: Option<&Path>) -> Result<SkillTree, CliError> {
     }
 }
 
-fn write_output(output: Option<&Path>, bytes: &[u8]) -> Result<(), CliError> {
+pub(crate) fn write_output(output: Option<&Path>, bytes: &[u8]) -> Result<(), CliError> {
     match output {
         Some(path) => std::fs::write(path, bytes).map_err(|source| CliError::FileWrite {
             path: path.to_path_buf(),
@@ -115,7 +127,7 @@ fn write_output(output: Option<&Path>, bytes: &[u8]) -> Result<(), CliError> {
     }
 }
 
-fn build_render_opts(config: &Config, project_title: Option<String>) -> RenderOpts {
+pub(crate) fn build_render_opts(config: &Config, project_title: Option<String>) -> RenderOpts {
     RenderOpts {
         colors: config.colors.values.clone(),
         cluster_labels: config.cluster.values.clone(),

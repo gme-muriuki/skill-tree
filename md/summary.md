@@ -24,6 +24,7 @@
 - [Render](./design/render.md)
 - [Node display](./design/node-display.md)
 - [See-also edges](./design/see-also.md)
+- [HTML embed](./design/html-embed.md)
 
 # Contribution guide
 

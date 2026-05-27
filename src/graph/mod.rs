@@ -14,6 +14,7 @@ use crate::github::issues::{CrossReferenceSource, RawIssueEdges};
 use crate::github::projects::{ItemContent, ProjectFetch, ProjectItem, RepositoryRef};
 
 mod see_also;
+mod unblocked;
 mod validate;
 
 // ---------------------------------------------------------------------------
