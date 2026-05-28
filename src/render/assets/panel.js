@@ -6,7 +6,14 @@
    the panel rather than navigating; the GitHub link moves into the panel.
    body_html is rendered + sanitized at generation time, so it is injected
    as-is. Pan/zoom is a CSS transform on the SVG (no external dependency).
-   Search-# and the status filter dim non-matching nodes (layout stays). */
+   Search-# and the status filter dim non-matching nodes (layout stays).
+
+   Conservative-baseline style: IIFE, `var`, function declarations, no
+   arrow funcs and no ES modules. The script is inlined into the
+   generated HTML with no build step, so it must parse in every browser
+   the embed targets. ES6 collection types (`Set`, `Map`) and
+   `Array.from` are used where they fit naturally; both are universally
+   available in evergreen browsers. */
 
 (function () {
   function esc(s) {
@@ -20,9 +27,9 @@
   // (saturated, mid-brightness); luminance via the standard sRGB
   // perceived-brightness coefficients.
   function labelText(hex) {
-    var r = parseInt(hex.substr(0, 2), 16);
-    var g = parseInt(hex.substr(2, 2), 16);
-    var b = parseInt(hex.substr(4, 2), 16);
+    var r = parseInt(hex.slice(0, 2), 16);
+    var g = parseInt(hex.slice(2, 4), 16);
+    var b = parseInt(hex.slice(4, 6), 16);
     return (r * 0.299 + g * 0.587 + b * 0.114) > 150 ? "#1f2328" : "#ffffff";
   }
 
@@ -347,6 +354,55 @@
       });
     }
 
+    // Label filter: one chip per distinct label across all records, sorted
+    // alphabetically. Click toggles active state; activeLabels uses OR
+    // semantics (a node passes if it carries any active label). Ghosts,
+    // drafts, and records without labels fail the filter when any chip
+    // is active; synthetic project-root / cluster-headers are exempt.
+    //
+    // `activeLabels` is a Set, not a plain object: label names come from
+    // GitHub (user-provided) and a label named `__proto__` against a
+    // plain object would clobber the prototype chain.
+    var labelBar = widget.querySelector(".st-label-bar");
+    var activeLabels = new Set();
+    if (labelBar) {
+      var catalog = new Map();
+      nodes.forEach(function (n) {
+        if (!n.rec || !n.rec.labels) return;
+        n.rec.labels.forEach(function (l) {
+          if (!catalog.has(l.name)) catalog.set(l.name, l.color);
+        });
+      });
+      Array.from(catalog.keys()).sort().forEach(function (name) {
+        var color = catalog.get(name);
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "st-label-chip";
+        btn.setAttribute("data-st-label", name);
+        btn.setAttribute("aria-pressed", "false");
+        btn.style.background = "#" + color;
+        btn.style.color = labelText(color);
+        btn.textContent = name;
+        labelBar.appendChild(btn);
+      });
+      if (labelBar.children.length) labelBar.hidden = false;
+      labelBar.addEventListener("click", function (e) {
+        var chip = e.target.closest && e.target.closest(".st-label-chip");
+        if (!chip) return;
+        var name = chip.getAttribute("data-st-label");
+        if (activeLabels.has(name)) {
+          activeLabels.delete(name);
+          chip.classList.remove("st-active");
+          chip.setAttribute("aria-pressed", "false");
+        } else {
+          activeLabels.add(name);
+          chip.classList.add("st-active");
+          chip.setAttribute("aria-pressed", "true");
+        }
+        applyDim();
+      });
+    }
+
     // Dim state has two orthogonal sources: filter (search + status) and
     // focus (selected node's 1-hop neighborhood). A node is lit only if
     // BOTH say lit. Structural nodes (project root, cluster headers) are
@@ -368,7 +424,12 @@
         var status = n.rec && n.rec.status;
         var okStatus = !st || status === st;
         var okFocus = !nbr || isStructural(n.id) || nbr[n.id];
-        n.g.classList.toggle("st-dim", !(okQ && okStatus && okFocus));
+        var okLabel = activeLabels.size === 0 ||
+          isStructural(n.id) ||
+          (n.rec && n.rec.labels && n.rec.labels.some(function (l) {
+            return activeLabels.has(l.name);
+          }));
+        n.g.classList.toggle("st-dim", !(okQ && okStatus && okFocus && okLabel));
       });
       edges.forEach(function (e) {
         var structural = isStructural(e.from) || isStructural(e.to);

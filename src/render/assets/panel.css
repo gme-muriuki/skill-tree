@@ -60,6 +60,37 @@
   border-radius: 3px;
 }
 
+/* --- label filter bar: click chip to OR-filter by label --- */
+.st-label-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--st-border);
+}
+.st-label-chip {
+  display: inline-block;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0.65;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+.st-label-chip:hover { opacity: 0.9; }
+.st-label-chip.st-active {
+  opacity: 1;
+  border-color: rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7) inset;
+}
+.st-label-chip:focus { outline: 2px solid var(--st-accent); outline-offset: 1px; }
+.st-label-chip:focus:not(:focus-visible) { outline: none; }
+
 /* --- main row: stage + panel --- */
 .st-main {
   display: flex;
