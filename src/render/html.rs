@@ -229,14 +229,32 @@ fn assemble(
     };
     // Escape `</` so the embedded JSON cannot close the <script> early.
     let data_safe = data_json.replace("</", "<\\/");
+    // CommonMark ends a `<div>` HTML block at the first blank line, so a
+    // markdown host (mdbook, Hugo, ...) would parse our CSS/JS as
+    // markdown the moment it hit one. Compact inlined payloads to a
+    // single contiguous block. Safe for CSS, JS (newlines preserved), and
+    // JSON (already single-line).
+    let css = strip_blank_lines(PANEL_CSS);
+    let js = strip_blank_lines(PANEL_JS);
+    let data_safe = strip_blank_lines(&data_safe);
     template
         .replace("__TITLE__", &esc_html(title))
         .replace("__STATS__", &esc_html(stats))
         .replace("__LEGEND__", legend)
-        .replace("__CSS__", PANEL_CSS)
-        .replace("__JS__", PANEL_JS)
+        .replace("__CSS__", &css)
+        .replace("__JS__", &js)
         .replace("__SVG__", svg)
         .replace("__DATA__", &data_safe)
+}
+
+/// Remove lines that are empty or whitespace-only. Newlines between
+/// non-blank lines are preserved, so JS ASI and CSS rule boundaries are
+/// unaffected.
+fn strip_blank_lines(s: &str) -> String {
+    s.lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Minimal HTML text escaping for interpolated text.

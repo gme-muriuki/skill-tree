@@ -25,6 +25,7 @@
 - [Node display](./design/node-display.md)
 - [See-also edges](./design/see-also.md)
 - [HTML embed](./design/html-embed.md)
+- [Embed demo](./design/embed-demo.md)
 
 # Contribution guide
 
