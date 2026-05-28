@@ -208,6 +208,15 @@
   margin: 3px 5px 0 0;
   font-size: 11.5px;
 }
+.st-label {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 9px;
+  margin: 3px 5px 0 0;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
 
 /* relationships: DEPENDS ON / BLOCKS */
 .st-rel { margin: 0 0 14px; }

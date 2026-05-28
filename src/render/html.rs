@@ -12,7 +12,7 @@ use pulldown_cmark::{Options, Parser, html};
 use serde::Serialize;
 
 use super::RenderOpts;
-use crate::graph::{EdgeKind, Graph, NodeId, NodeKind};
+use crate::graph::{EdgeKind, Graph, Label, NodeId, NodeKind};
 
 const PANEL_CSS: &str = include_str!("assets/panel.css");
 const PANEL_JS: &str = include_str!("assets/panel.js");
@@ -44,6 +44,8 @@ struct Record {
     cluster: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     assignees: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    labels: Vec<LabelRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     url: Option<String>,
     body_html: String,
@@ -61,6 +63,24 @@ struct Record {
     related: Vec<String>,
     /// Ready to pick up — see [`Graph::unblocked`].
     unblocked: bool,
+}
+
+/// Serializable mirror of [`crate::graph::Label`] for embedding in the
+/// JSON map. `color` is a 6-char hex string without `#`, straight from
+/// GitHub.
+#[derive(Debug, Serialize)]
+struct LabelRecord {
+    name: String,
+    color: String,
+}
+
+impl From<&Label> for LabelRecord {
+    fn from(label: &Label) -> Self {
+        Self {
+            name: label.name.clone(),
+            color: label.color.clone(),
+        }
+    }
 }
 
 /// Render `graph` + its already-generated `svg` into the final HTML.
@@ -136,6 +156,7 @@ fn build_records(graph: &Graph) -> BTreeMap<String, Record> {
                 status: node.status.clone(),
                 cluster: node.cluster.clone(),
                 assignees: node.assignees.clone(),
+                labels: node.labels.iter().map(LabelRecord::from).collect(),
                 url: node.url.clone(),
                 body_html: render_markdown(node.body.as_deref().unwrap_or("")),
                 depends_on: dep,
@@ -292,6 +313,7 @@ mod tests {
             body: Some(body.into()),
             state: Some("OPEN".into()),
             assignees: vec!["octocat".into()],
+            labels: vec![],
         }
     }
 
@@ -306,6 +328,7 @@ mod tests {
             body: Some("body".into()),
             state: None,
             assignees: vec![],
+            labels: vec![],
         }
     }
 

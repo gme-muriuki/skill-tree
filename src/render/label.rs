@@ -111,6 +111,7 @@ mod tests {
             body: None,
             state: Some("OPEN".into()),
             assignees: vec![],
+            labels: vec![],
         }
     }
 
@@ -125,6 +126,7 @@ mod tests {
             body: None,
             state: None,
             assignees: vec![],
+            labels: vec![],
         }
     }
 
@@ -227,6 +229,7 @@ mod tests {
             body: None,
             state: None,
             assignees: vec![],
+            labels: vec![],
         };
         assert_eq!(format_label(&n), "ext/lib#99");
     }
@@ -243,6 +246,7 @@ mod tests {
             body: None,
             state: None,
             assignees: vec![],
+            labels: vec![],
         };
         assert_eq!(format_label(&n), "[redacted]");
     }

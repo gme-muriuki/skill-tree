@@ -123,6 +123,16 @@ pub struct Node {
     pub state: Option<String>,
     /// Logins of users assigned to this node.
     pub assignees: Vec<String>,
+    /// GitHub labels on the issue/PR (empty for drafts, redacted, ghosts).
+    pub labels: Vec<Label>,
+}
+
+/// A GitHub issue/PR label as exposed by [`Node`]. `color` is a 6-char
+/// hex string without a leading `#`, as GitHub returns it.
+#[derive(Debug, Clone)]
+pub struct Label {
+    pub name: String,
+    pub color: String,
 }
 
 /// Kind of underlying GitHub object, for render-time styling.
@@ -429,6 +439,15 @@ fn materialize_node(item: &ProjectItem, colors_field: &str, cluster_field: &str)
                 body: Some(c.body.clone()),
                 state: Some(c.state.clone()),
                 assignees: c.assignees.nodes.iter().map(|u| u.login.clone()).collect(),
+                labels: c
+                    .labels
+                    .nodes
+                    .iter()
+                    .map(|l| Label {
+                        name: l.name.clone(),
+                        color: l.color.clone(),
+                    })
+                    .collect(),
             })
         }
         ItemContent::PullRequest(c) => {
@@ -447,6 +466,15 @@ fn materialize_node(item: &ProjectItem, colors_field: &str, cluster_field: &str)
                 body: Some(c.body.clone()),
                 state: Some(c.state.clone()),
                 assignees: c.assignees.nodes.iter().map(|u| u.login.clone()).collect(),
+                labels: c
+                    .labels
+                    .nodes
+                    .iter()
+                    .map(|l| Label {
+                        name: l.name.clone(),
+                        color: l.color.clone(),
+                    })
+                    .collect(),
             })
         }
         ItemContent::DraftIssue(c) => Some(Node {
@@ -459,6 +487,7 @@ fn materialize_node(item: &ProjectItem, colors_field: &str, cluster_field: &str)
             body: Some(c.body.clone()),
             state: None,
             assignees: c.assignees.nodes.iter().map(|u| u.login.clone()).collect(),
+            labels: vec![],
         }),
         ItemContent::Redacted => Some(Node {
             id: NodeId::Redacted(item.id.clone()),
@@ -470,6 +499,7 @@ fn materialize_node(item: &ProjectItem, colors_field: &str, cluster_field: &str)
             body: None,
             state: None,
             assignees: vec![],
+            labels: vec![],
         }),
     }
 }
@@ -533,6 +563,7 @@ fn ghost_node(owner: &str, repo: &str, number: u64) -> Node {
         body: None,
         state: None,
         assignees: vec![],
+        labels: vec![],
     }
 }
 
@@ -727,6 +758,7 @@ mod tests {
                 name_with_owner: format!("{owner}/{repo}"),
             },
             assignees: NodeList::default(),
+            labels: NodeList::default(),
             sub_issues: page(sub_issues),
         }
     }

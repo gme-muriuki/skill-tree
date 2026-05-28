@@ -527,6 +527,7 @@ mod tests {
             body: None,
             state: Some("OPEN".into()),
             assignees: vec![],
+            labels: vec![],
         }
     }
 
@@ -541,6 +542,7 @@ mod tests {
             body: None,
             state: None,
             assignees: vec![],
+            labels: vec![],
         }
     }
 
@@ -555,6 +557,7 @@ mod tests {
             body: None,
             state: None,
             assignees: vec![],
+            labels: vec![],
         }
     }
 
@@ -569,6 +572,7 @@ mod tests {
             body: None,
             state: None,
             assignees: vec![],
+            labels: vec![],
         }
     }
 

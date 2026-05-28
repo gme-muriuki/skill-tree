@@ -15,6 +15,17 @@
     });
   }
 
+  // Pick a black/white text color that's readable on a given GitHub
+  // label hex background. Threshold tuned for GitHub's typical palette
+  // (saturated, mid-brightness); luminance via the standard sRGB
+  // perceived-brightness coefficients.
+  function labelText(hex) {
+    var r = parseInt(hex.substr(0, 2), 16);
+    var g = parseInt(hex.substr(2, 2), 16);
+    var b = parseInt(hex.substr(4, 2), 16);
+    return (r * 0.299 + g * 0.587 + b * 0.114) > 150 ? "#1f2328" : "#ffffff";
+  }
+
   // --- fit-to-view + pan/zoom over the inlined SVG -----------------------
   function setupZoom(stage, svg) {
     svg.removeAttribute("width");
@@ -207,7 +218,16 @@
       html += (rec.assignees && rec.assignees.length)
         ? rec.assignees.map(function (p) { return '<span class="st-assignee">@' + esc(p) + "</span>"; }).join("")
         : "<em>none</em>";
-      html += "</dd></dl>";
+      html += "</dd>";
+      if (rec.labels && rec.labels.length) {
+        html += "<dt>Labels</dt><dd>";
+        html += rec.labels.map(function (l) {
+          return '<span class="st-label" style="background:#' + esc(l.color) +
+            ';color:' + labelText(l.color) + '">' + esc(l.name) + "</span>";
+        }).join("");
+        html += "</dd>";
+      }
+      html += "</dl>";
 
       html += relSection("Depends on", rec.depends_on, true);
       html += relSection("Blocks", rec.blocks, true);

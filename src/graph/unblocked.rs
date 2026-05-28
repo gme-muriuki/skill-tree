@@ -75,6 +75,7 @@ mod tests {
             body: None,
             state: Some(state.into()),
             assignees: vec![],
+            labels: vec![],
         }
     }
 

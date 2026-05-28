@@ -37,7 +37,7 @@ The sub-issue overflow query runs per-issue when an inline sub-issue connection 
 
 Project items expose their underlying GitHub object through an `ItemContent` enum with four variants: `Issue`, `PullRequest`, `DraftIssue`, and `Redacted` (the token has lost permission to read the content, or the content was deleted).
 
-All four travel through the transport layer unfiltered. The graph layer decides what to render. Each content variant carries fields the graph does not render today (assignees, labels, state, body).
+All four travel through the transport layer unfiltered. The graph layer decides what to render. Issue and PR variants carry assignees, labels (name + GitHub color), state, and body; the DOT renderer uses state and assignees in node labels, and the HTML embed surfaces all four in the side panel.
 
 `DraftIssue` items have no underlying GitHub Issue and therefore no sub-issues or blocking edges. They are leaf nodes.
 

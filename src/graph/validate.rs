@@ -184,6 +184,7 @@ mod tests {
             body: None,
             state: None,
             assignees: vec![],
+            labels: vec![],
         }
     }
 

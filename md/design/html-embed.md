@@ -85,6 +85,7 @@ Each record:
   "status":     "In Progress",
   "cluster":    "Borrow checker",
   "assignees":  ["octocat"],
+  "labels":     [{ "name": "T-compiler", "color": "bfd4f2" }],
   "url":        "https://github.com/owner/repo/issues/12",
   "body_html":  "<p>rendered, sanitized markdown…</p>",
   "depends_on": ["owner/repo#8"],
@@ -96,7 +97,10 @@ Each record:
 
 Most fields come from the `Node` the graph already holds: `title` is the node
 display label (`#<number>: <title>`), and `number`, `state`, `status`,
-`cluster`, `assignees`, `url`, and the rendered `body` follow. `depends_on`
+`cluster`, `assignees`, `labels`, `url`, and the rendered `body` follow.
+Each label carries GitHub's `color` (6-char hex, no `#`) so the panel can
+render chips that match the repo's actual label palette; the JS picks a
+black/white text color by luminance for readability. `depends_on`
 and `blocks` are the node's incoming and outgoing dependency edges — both
 `Blocks` (blocker → blocked) and `SubIssue` (child → parent, so a parent
 depends on its children) — as NodeId strings the panel resolves against the

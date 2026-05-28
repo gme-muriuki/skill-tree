@@ -120,6 +120,14 @@ pub struct UserRef {
     pub login: String,
 }
 
+/// A GitHub issue/PR label. `color` is a 6-char hex string without `#`,
+/// as GitHub returns it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LabelRef {
+    pub name: String,
+    pub color: String,
+}
+
 /// Reference to a sub-issue. Carries enough to render a graph node;
 /// the full sub-issue is fetched separately if the graph layer expands it.
 #[derive(Debug, Clone, Deserialize)]
@@ -171,6 +179,8 @@ pub struct IssueContent {
     pub body: String,
     pub repository: RepositoryRef,
     pub assignees: NodeList<UserRef>,
+    #[serde(default)]
+    pub labels: NodeList<LabelRef>,
     /// Sub-issues from the inline `subIssues(first: 50)` connection on
     /// the items query. After [`fetch_project`], `nodes` is the complete
     /// list and `page_info.has_next_page` is `false` — overflow has been
@@ -189,6 +199,8 @@ pub struct PullRequestContent {
     pub body: String,
     pub repository: RepositoryRef,
     pub assignees: NodeList<UserRef>,
+    #[serde(default)]
+    pub labels: NodeList<LabelRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -576,6 +588,7 @@ const FETCH_PROJECT_ITEMS_QUERY: &str = r#"
                 body
                 repository { nameWithOwner }
                 assignees(first: 10) { nodes { login } }
+                labels(first: 20) { nodes { name color } }
                 subIssues(first: 50) {
                     nodes {
                         id
@@ -597,6 +610,7 @@ const FETCH_PROJECT_ITEMS_QUERY: &str = r#"
                 body
                 repository { nameWithOwner }
                 assignees(first: 10) { nodes { login } }
+                labels(first: 20) { nodes { name color } }
             }
             ... on DraftIssue {
                 id
