@@ -126,8 +126,13 @@
   stroke: var(--st-accent);
   stroke-width: 3.5;
 }
-/* search / status filter de-emphasis (dim, not hide — layout stays put) */
+/* search / status filter / focus-neighborhood de-emphasis
+   (dim, not hide — layout stays put) */
 .st-stage g.node.st-dim { opacity: 0.16; }
+.st-stage g.edge.st-dim { opacity: 0.12; }
+/* edge connecting the selected node to a 1-hop neighbor */
+.st-stage g.edge.st-edge-focus path { stroke-width: 2.4px; }
+.st-stage g.edge.st-edge-focus polygon { stroke-width: 2.4px; }
 
 /* --- panel: card-style detail surface --- */
 .st-panel {
@@ -215,23 +220,66 @@
   margin-bottom: 6px;
 }
 .st-rel-list { list-style: none; margin: 0; padding: 0; }
-.st-rel-item { display: flex; align-items: baseline; gap: 7px; padding: 2px 0; font-size: 12px; }
+.st-rel-item { display: flex; align-items: baseline; gap: 7px; padding: 3px 6px; margin: 0 -6px; font-size: 12px; border-radius: 5px; }
+.st-rel-clickable { cursor: pointer; }
+.st-rel-clickable:hover { background: var(--st-body-bg); }
+.st-rel-clickable:focus { outline: 2px solid #4a90d9; outline-offset: -2px; }
+.st-rel-clickable:focus:not(:focus-visible) { outline: none; }
 .st-rel-mark { flex: 0 0 auto; font-size: 11px; }
 .st-rel-done { color: #2da44e; }
 .st-rel-open { color: var(--st-muted); }
 
-/* body: rendered + sanitized markdown HTML */
+/* dependency progress bar (counts depends_on items that are no longer
+   OPEN — proxy for "upstream work done"). */
+.st-progress { margin: 0 0 12px; }
+.st-progress-label { font-size: 11px; color: var(--st-muted); margin-bottom: 4px; }
+.st-progress-bar {
+  height: 6px;
+  background: var(--st-chip);
+  border: 1px solid var(--st-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.st-progress-fill {
+  height: 100%;
+  background: #2da44e;
+  transition: width 0.2s ease;
+}
+
+/* body: rendered + sanitized markdown HTML. Collapsed by default so
+   RFC-length bodies don't crowd the panel; toggle to expand. */
+.st-body-wrap { position: relative; margin: 0 0 8px; }
 .st-body {
   background: var(--st-body-bg);
   border: 1px solid var(--st-border);
   border-radius: 8px;
   padding: 12px 14px;
-  max-height: 280px;
-  overflow-y: auto;
   font-size: 12.5px;
   line-height: 1.55;
   word-break: break-word;
 }
+.st-body-wrap.st-collapsed .st-body {
+  max-height: 180px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.st-body-wrap:not(.st-collapsed) .st-body {
+  max-height: 480px;
+  overflow-y: auto;
+}
+.st-body-toggle {
+  display: block;
+  margin: 6px 0 0;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--st-accent);
+  cursor: pointer;
+}
+.st-body-toggle:hover { text-decoration: underline; }
 .st-body > :first-child { margin-top: 0; }
 .st-body > :last-child { margin-bottom: 0; }
 .st-body p { margin: 0 0 8px; }

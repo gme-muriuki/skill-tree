@@ -70,7 +70,23 @@
       setTimeout(function () { stage._stMoved = false; }, 0);
     });
 
-    return { fit: fit, zoomIn: function () { zoomCenter(1.3); }, zoomOut: function () { zoomCenter(1 / 1.3); } };
+    function centerOn(g) {
+      // Pixel-space deltas via getBoundingClientRect — accounts for both
+      // the inner SVG viewBox and our outer CSS transform without us
+      // having to invert either.
+      var sr = stage.getBoundingClientRect();
+      var gr = g.getBoundingClientRect();
+      tx += (sr.left + sr.width / 2) - (gr.left + gr.width / 2);
+      ty += (sr.top + sr.height / 2) - (gr.top + gr.height / 2);
+      apply();
+    }
+
+    return {
+      fit: fit,
+      zoomIn: function () { zoomCenter(1.3); },
+      zoomOut: function () { zoomCenter(1 / 1.3); },
+      centerOn: centerOn,
+    };
   }
 
   function buildToolbar(stage, zoom) {
@@ -106,6 +122,7 @@
     }
     var emptyHTML = panel.innerHTML;
     var selected = null;
+    var focusId = null; // currently-focused NodeId; drives neighborhood dim
 
     var zoom = setupZoom(stage, svg);
     buildToolbar(stage, zoom);
@@ -113,12 +130,16 @@
     function clear() {
       if (selected) selected.classList.remove("st-selected");
       selected = null;
+      focusId = null;
       panel.innerHTML = emptyHTML;
+      applyDim();
     }
 
     // relationship list; each neighbor resolved via the map. `marked`
     // shows a done/pending check (DEPENDS ON / BLOCKS); without it the
-    // list is neutral (RELATED — decorative cross-refs/see-also).
+    // list is neutral (RELATED — decorative cross-refs/see-also). A
+    // neighbor is clickable iff it has both a record AND an SVG node on
+    // the board (ghost cross-refs render as plain text).
     function relSection(label, ids, marked) {
       if (!ids || !ids.length) return "";
       var items = ids.map(function (rid) {
@@ -131,19 +152,26 @@
             ? '<span class="st-rel-mark st-rel-done">✓</span>'
             : '<span class="st-rel-mark st-rel-open">•</span>';
         }
-        return '<li class="st-rel-item">' + mark + "<span>" + esc(title) + "</span></li>";
+        var clickable = !!(r && byId[rid]);
+        var attrs = clickable
+          ? ' class="st-rel-item st-rel-clickable" role="button" tabindex="0" data-st-id="' + esc(rid) + '"'
+          : ' class="st-rel-item"';
+        return '<li' + attrs + ">" + mark + "<span>" + esc(title) + "</span></li>";
       }).join("");
       return '<div class="st-rel"><div class="st-rel-label">' + label +
              '</div><ul class="st-rel-list">' + items + "</ul></div>";
     }
 
-    function show(g, id) {
+    function show(g, id, recenter) {
       var rec = data[id];
       if (!rec) return;
 
       if (selected) selected.classList.remove("st-selected");
       selected = g;
       g.classList.add("st-selected");
+      focusId = id;
+      if (recenter) zoom.centerOn(g);
+      applyDim();
 
       var html = '<h2 class="st-title">' + esc(rec.title) + "</h2>";
 
@@ -153,6 +181,24 @@
       else if (rec.state) html += '<span class="st-badge st-badge-status">' + esc(rec.state) + "</span>";
       if (rec.status) html += '<span class="st-badge st-badge-status">' + esc(rec.status) + "</span>";
       html += "</div>";
+
+      // Dependency progress bar: counts upstream blockers + sub-issues
+      // (depends_on) that are no longer OPEN. Most useful for tracking
+      // issues whose sub-issues dominate the list, but informative for
+      // any node with blockers.
+      if (rec.depends_on && rec.depends_on.length) {
+        var total = rec.depends_on.length;
+        var done = 0;
+        rec.depends_on.forEach(function (rid) {
+          var r = data[rid];
+          if (r && r.state && r.state !== "OPEN") done++;
+        });
+        var pct = Math.round((done / total) * 100);
+        html += '<div class="st-progress">' +
+          '<div class="st-progress-label">' + done + ' of ' + total + ' upstream done</div>' +
+          '<div class="st-progress-bar"><div class="st-progress-fill" style="width: ' + pct + '%"></div></div>' +
+        '</div>';
+      }
 
       html += '<dl class="st-meta">';
       html += "<dt>Issue</dt><dd>" + esc(id) + "</dd>";
@@ -167,27 +213,94 @@
       html += relSection("Blocks", rec.blocks, true);
       html += relSection("Related", rec.related, false);
 
-      // body_html is sanitized at generation time; inject as-is.
-      if (rec.body_html) html += '<div class="st-body">' + rec.body_html + "</div>";
+      // body_html is sanitized at generation time; inject as-is. Wrapped
+      // in a collapsible container so RFC-length bodies don't crowd the
+      // panel (collapsed by default, "Show more" expands).
+      if (rec.body_html) {
+        html += '<div class="st-body-wrap st-collapsed">' +
+          '<div class="st-body">' + rec.body_html + "</div>" +
+          '<button type="button" class="st-body-toggle">Show more</button>' +
+        "</div>";
+      }
       if (rec.url) html += '<a class="st-gh" target="_blank" rel="noopener" href="' + esc(rec.url) + '">View on GitHub &rarr;</a>';
 
       panel.innerHTML = html;
     }
 
-    // Map clickable issue nodes to their records.
-    var issueNodes = [];
+    // Index every clickable node (issues, PRs, drafts). Drafts have no
+    // record so the click handler is only wired when one exists; the
+    // filter operates on all of them so a draft titled "Foo" dims when
+    // the user searches for "bar". `byId` lets the panel's relationship
+    // rows look up an SVG node from a NodeId for click-to-navigate.
+    var nodes = [];
+    var byId = {};
     [].forEach.call(svg.querySelectorAll("g.node"), function (g) {
       var t = g.querySelector("title");
       if (!t) return;
       var id = t.textContent;
-      if (!data[id]) return; // synthetic headers, drafts: no record
-      issueNodes.push({ g: g, id: id });
-      g.addEventListener("click", function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (stage._stMoved) return; // was a drag, not a click
-        show(g, id);
-      });
+      var rec = data[id] || null;
+      // Visible label = concatenated <text> children (graphviz emits one
+      // per wrapped line). Lower-cased once for substring search.
+      var label = [].map.call(g.querySelectorAll("text"), function (te) {
+        return te.textContent || "";
+      }).join(" ").toLowerCase();
+      nodes.push({ g: g, id: id, rec: rec, label: label });
+      byId[id] = g;
+      if (rec) {
+        g.addEventListener("click", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (stage._stMoved) return; // was a drag, not a click
+          show(g, id, false);
+        });
+      }
+    });
+
+    // Index every edge so focus-mode can highlight 1-hop neighborhood
+    // edges and dim the rest. Edge <title> is `srcId->tgtId` (graphviz
+    // emits each directed edge that way; no NodeId format contains the
+    // literal `->`).
+    var edges = [];
+    [].forEach.call(svg.querySelectorAll("g.edge"), function (g) {
+      var t = g.querySelector("title");
+      if (!t) return;
+      var parts = t.textContent.split("->");
+      if (parts.length !== 2) return;
+      edges.push({ from: parts[0], to: parts[1], g: g });
+    });
+
+    // Synthetic project-root and cluster-header nodes (id prefix `__`) are
+    // structural skeleton; never dim or highlight them by focus.
+    function isStructural(id) { return id.indexOf("__") === 0; }
+
+    // Navigate to a neighbor clicked from the panel relationship list.
+    // Re-centers the SVG so the target lands in view even if it was
+    // scrolled off the visible region.
+    function navigate(id) {
+      var g = byId[id];
+      if (g && data[id]) show(g, id, true);
+    }
+
+    panel.addEventListener("click", function (e) {
+      var toggle = e.target.closest && e.target.closest(".st-body-toggle");
+      if (toggle) {
+        var wrap = toggle.closest(".st-body-wrap");
+        if (wrap) {
+          var collapsed = wrap.classList.toggle("st-collapsed");
+          toggle.textContent = collapsed ? "Show more" : "Show less";
+        }
+        return;
+      }
+      var item = e.target.closest && e.target.closest(".st-rel-clickable");
+      if (!item) return;
+      navigate(item.getAttribute("data-st-id"));
+    });
+    panel.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      var item = e.target.closest && e.target.closest(".st-rel-clickable");
+      if (!item) return;
+      e.preventDefault();
+      navigate(item.getAttribute("data-st-id"));
     });
 
     // Click empty canvas (not a node, not a drag) -> clear panel.
@@ -203,8 +316,8 @@
 
     if (statusSel) {
       var seen = {};
-      issueNodes.forEach(function (n) {
-        var s = data[n.id].status;
+      nodes.forEach(function (n) {
+        var s = n.rec && n.rec.status;
         if (s) seen[s] = true;
       });
       Object.keys(seen).sort().forEach(function (s) {
@@ -214,18 +327,44 @@
       });
     }
 
-    function applyFilter() {
-      var q = ((search && search.value) || "").trim().replace(/^#/, "");
+    // Dim state has two orthogonal sources: filter (search + status) and
+    // focus (selected node's 1-hop neighborhood). A node is lit only if
+    // BOTH say lit. Structural nodes (project root, cluster headers) are
+    // skipped by focus dimming so the tree skeleton stays visible.
+    function applyDim() {
+      var q = ((search && search.value) || "").trim().toLowerCase().replace(/^#/, "");
       var st = (statusSel && statusSel.value) || "";
-      issueNodes.forEach(function (n) {
-        var rec = data[n.id];
-        var okNum = !q || String(rec.number).indexOf(q) !== -1;
-        var okStatus = !st || rec.status === st;
-        n.g.classList.toggle("st-dim", !(okNum && okStatus));
+      var nbr = null;
+      if (focusId && data[focusId]) {
+        var rec = data[focusId];
+        nbr = {};
+        nbr[focusId] = true;
+        ["depends_on", "blocks", "related"].forEach(function (k) {
+          (rec[k] || []).forEach(function (rid) { nbr[rid] = true; });
+        });
+      }
+      nodes.forEach(function (n) {
+        var okQ = !q || n.label.indexOf(q) !== -1;
+        var status = n.rec && n.rec.status;
+        var okStatus = !st || status === st;
+        var okFocus = !nbr || isStructural(n.id) || nbr[n.id];
+        n.g.classList.toggle("st-dim", !(okQ && okStatus && okFocus));
+      });
+      edges.forEach(function (e) {
+        var structural = isStructural(e.from) || isStructural(e.to);
+        var lit = !nbr ||
+          structural ||
+          (e.from === focusId && nbr[e.to]) ||
+          (e.to === focusId && nbr[e.from]);
+        e.g.classList.toggle("st-dim", !!nbr && !lit);
+        e.g.classList.toggle(
+          "st-edge-focus",
+          !!nbr && !structural && lit
+        );
       });
     }
-    if (search) search.addEventListener("input", applyFilter);
-    if (statusSel) statusSel.addEventListener("change", applyFilter);
+    if (search) search.addEventListener("input", applyDim);
+    if (statusSel) statusSel.addEventListener("change", applyDim);
   }
 
   document.addEventListener("DOMContentLoaded", function () {
