@@ -30,16 +30,28 @@
 .st-title-main { font-size: 15px; font-weight: 600; white-space: nowrap; }
 .st-stats { font-size: 12px; color: var(--st-muted); white-space: nowrap; }
 .st-controls { display: flex; gap: 8px; flex: 0 0 auto; }
-.st-search, .st-status-filter {
+.st-search, .st-status-filter, .st-label-toggle {
   background: var(--st-chip);
   color: var(--st-fg);
   border: 1px solid var(--st-border);
   border-radius: 8px;
   padding: 5px 10px;
   font-size: 12.5px;
+  font: inherit;
 }
+.st-search { font-size: 12.5px; }
 .st-search::placeholder { color: var(--st-muted); }
-.st-search:focus, .st-status-filter:focus { outline: none; border-color: var(--st-accent); }
+.st-search:focus, .st-status-filter:focus, .st-label-toggle:focus {
+  outline: none;
+  border-color: var(--st-accent);
+}
+.st-label-toggle { cursor: pointer; font-weight: 500; }
+.st-label-toggle:hover { border-color: var(--st-accent); }
+.st-label-toggle.st-open { border-color: var(--st-accent); background: var(--st-chip); }
+.st-label-toggle.st-has-active {
+  border-color: var(--st-accent);
+  color: var(--st-accent);
+}
 
 /* --- legend --- */
 .st-legend {
@@ -69,6 +81,9 @@
   padding: 7px 16px;
   border-bottom: 1px solid var(--st-border);
 }
+/* Author `display: flex` would otherwise override the UA
+   `[hidden] { display: none }` rule, leaving the bar visible. */
+.st-label-bar[hidden] { display: none; }
 .st-label-chip {
   display: inline-block;
   border: 1px solid transparent;

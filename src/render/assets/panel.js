@@ -22,6 +22,10 @@
     });
   }
 
+  // Per-widget id counter so multiple widgets on the same page get
+  // distinct ARIA target ids (used by the labels toggle's aria-controls).
+  var widgetCounter = 0;
+
   // Pick a black/white text color that's readable on a given GitHub
   // label hex background. Threshold tuned for GitHub's typical palette
   // (saturated, mid-brightness); luminance via the standard sRGB
@@ -364,6 +368,7 @@
     // GitHub (user-provided) and a label named `__proto__` against a
     // plain object would clobber the prototype chain.
     var labelBar = widget.querySelector(".st-label-bar");
+    var labelToggle = widget.querySelector(".st-label-toggle");
     var activeLabels = new Set();
     if (labelBar) {
       var catalog = new Map();
@@ -385,7 +390,35 @@
         btn.textContent = name;
         labelBar.appendChild(btn);
       });
-      if (labelBar.children.length) labelBar.hidden = false;
+      var hasLabels = labelBar.children.length > 0;
+      // Wire the toggle: hidden by default to keep the topbar tidy when
+      // a board has no labels; visible only when chips exist. Bar itself
+      // stays hidden until the user opens it, so the graph keeps the
+      // full vertical space.
+      if (labelToggle && hasLabels) {
+        var labelBarId = "st-label-bar-" + (++widgetCounter);
+        labelBar.id = labelBarId;
+        labelToggle.setAttribute("aria-controls", labelBarId);
+        labelToggle.hidden = false;
+        labelToggle.addEventListener("click", function () {
+          var open = labelBar.hasAttribute("hidden");
+          if (open) {
+            labelBar.removeAttribute("hidden");
+          } else {
+            labelBar.setAttribute("hidden", "");
+          }
+          labelToggle.setAttribute("aria-expanded", open ? "true" : "false");
+          labelToggle.classList.toggle("st-open", open);
+        });
+      }
+      function refreshLabelToggleText() {
+        if (!labelToggle) return;
+        labelToggle.textContent = activeLabels.size === 0
+          ? "Labels"
+          : "Labels (" + activeLabels.size + ")";
+        labelToggle.classList.toggle("st-has-active", activeLabels.size > 0);
+      }
+      refreshLabelToggleText();
       labelBar.addEventListener("click", function (e) {
         var chip = e.target.closest && e.target.closest(".st-label-chip");
         if (!chip) return;
@@ -399,6 +432,7 @@
           chip.classList.add("st-active");
           chip.setAttribute("aria-pressed", "true");
         }
+        refreshLabelToggleText();
         applyDim();
       });
     }
