@@ -33,6 +33,8 @@ The sub-issue overflow query runs per-issue when an inline sub-issue connection 
 
 `FieldValue::display_string()` returns the value as a string for `[colors.values]` lookup and CLI output. It returns `None` for `Unknown`.
 
+Both the project's field definitions (metadata query) and each item's `fieldValues` are fetched at `first: 100` with no overflow handling. A project with more than 100 custom fields would truncate; no real board approaches this.
+
 ## Item content
 
 Project items expose their underlying GitHub object through an `ItemContent` enum with four variants: `Issue`, `PullRequest`, `DraftIssue`, and `Redacted` (the token has lost permission to read the content, or the content was deleted).
@@ -49,4 +51,6 @@ GitHub caps `first` at 100, so an issue with 200 sub-issues costs two follow-up 
 
 ## Errors
 
-`fetch_project()` returns `GitHubError` from `github/mod.rs`. If the project does not exist or the token cannot see it, the metadata query returns a `GitHubError::GraphQLError` with GitHub's upstream message. Config-vs-metadata mismatches surface as `GitHubError::ConfigMismatch`, a new variant carrying the offending field or option name.
+`fetch_project()` returns `GitHubError` from `github/mod.rs`. An owner that resolves to neither an organization nor a user surfaces as `GitHubError::OwnerUnreachable`; an owner that resolves but has no project with the given number surfaces as `GitHubError::ProjectNotFound`, tagged with the resolved owner kind. Config-vs-metadata mismatches surface as `GitHubError::ConfigMismatch`, carrying every offending field or option name found in one pass.
+
+Because the metadata query probes both `organization` and `user`, GitHub always returns a path-level `NOT_FOUND` error for the branch that does not match the owner's account type. The transport returns the populated `data` when present and only surfaces `GitHubError::GraphQLError` when `data` is null, so the expected probe error does not derail a normal fetch.

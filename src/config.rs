@@ -43,7 +43,9 @@ pub struct GithubConfig {
     /// Project number from the GitHub Projects URL.
     ///
     /// For `github.com/orgs/rust-lang/projects/42` -> `42`.
-    pub project: u64,
+    ///
+    /// `u32` mirrors GitHub's 32-bit `Int` project number.
+    pub project: u32,
 }
 
 /// Declares one GitHub Project custom field that skill-tree should read.
@@ -148,6 +150,12 @@ impl SkillTree {
 
 impl Config {
     fn validate(&self) -> Fallible<()> {
+        // Color values with no field to read them from can never apply —
+        // treat the missing `github-name` as an error, not silent dead config.
+        if !self.colors.values.is_empty() && self.colors.github_name.is_empty() {
+            return Err(ConfigError::ColorsValuesWithoutField);
+        }
+
         for (key, value) in &self.colors.values {
             if !is_valid_hex_color(value) {
                 return Err(ConfigError::InvalidColor {
@@ -354,6 +362,24 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(ConfigError::InvalidColor { .. })
+        ));
+    }
+
+    #[test]
+    fn validation_fails_when_colors_values_set_without_github_name() {
+        // `[colors.values]` populated but no `github-name` to read — the
+        // values can never apply, so this is rejected rather than ignored.
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"rust-lang\"
+            project = 42
+
+            [colors.values]
+            \"In Progress\" = \"#4a90d9\"
+        "});
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ColorsValuesWithoutField)
         ));
     }
 

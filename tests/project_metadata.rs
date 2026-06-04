@@ -75,6 +75,42 @@ async fn user_with_project_returns_meta_with_user_kind() {
 }
 
 #[tokio::test]
+async fn user_project_succeeds_despite_not_found_error_on_org_probe() {
+    // GitHub's real dual-probe response: the `user` branch returns data while
+    // the `organization` branch returns null *plus* a path-level NOT_FOUND
+    // error. The fetch must succeed on the populated branch, not fail on the
+    // path error. The other mocks omit `errors`, so this is the case that
+    // guards the transport's partial-success handling.
+    let gh = MockGitHub::start().await;
+    gh.ok_data_with_errors(
+        json!({
+            "organization": null,
+            "user": {
+                "projectV2": {
+                    "id": "PVT_1",
+                    "title": "personal skill tree",
+                    "fields": { "nodes": [] }
+                }
+            }
+        }),
+        json!([{
+            "type": "NOT_FOUND",
+            "path": ["organization"],
+            "message": "Could not resolve to an Organization with the login of 'nikomatsakis'."
+        }]),
+    )
+    .mount(&gh.server)
+    .await;
+
+    let client = gh.client(Duration::from_secs(10));
+    let meta = fetch_project_meta(&client, "nikomatsakis", 7)
+        .await
+        .unwrap();
+    assert_eq!(meta.owner_kind, OwnerKind::User);
+    assert_eq!(meta.id, "PVT_1");
+}
+
+#[tokio::test]
 async fn both_null_returns_owner_unreachable() {
     let gh = MockGitHub::start().await;
     gh.ok_data(json!({

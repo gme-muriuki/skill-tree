@@ -34,6 +34,15 @@ pub enum ConfigError {
         /// The invalid color value.
         value: String,
     },
+
+    /// `[colors.values]` is populated but `[colors] github-name` is empty,
+    /// so no field drives node color and the values can never apply — almost
+    /// certainly a missing `github-name` rather than intentional dead config.
+    #[error(
+        "[colors.values] is set but [colors] github-name is empty — \
+         no field drives node color"
+    )]
+    ColorsValuesWithoutField,
 }
 
 /// One concrete way `.skill-tree.toml` disagrees with the project metadata

@@ -72,7 +72,7 @@ pub enum GitHubError {
     #[error("project #{number} not found under {owner_kind} '{owner}'")]
     ProjectNotFound {
         owner: String,
-        number: u64,
+        number: u32,
         owner_kind: OwnerKind,
     },
 

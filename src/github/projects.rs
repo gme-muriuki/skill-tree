@@ -407,7 +407,9 @@ struct FetchProjectMetaResponse {
 #[derive(Serialize)]
 struct ProjectMetaVariables<'a> {
     owner: &'a str,
-    number: u64,
+    // GitHub's GraphQL `Int` is 32-bit; project numbers are small and
+    // non-negative, so `u32` models the `$number: Int!` variable honestly.
+    number: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +417,13 @@ struct ProjectMetaVariables<'a> {
 // ---------------------------------------------------------------------------
 
 /// GraphQL document for the project metadata query. Probes `organization`
-/// and `user` in one round-trip; at most one is non-null.
+/// and `user` in one round-trip; at most one branch is non-null. GitHub
+/// returns a path-level `NOT_FOUND` error for the branch that does not match
+/// the owner's account type; the transport in `github/mod.rs` keeps the
+/// populated `data` and discards those path errors.
+///
+/// Field definitions are fetched at `first: 100` with no overflow handling —
+/// the documented cap. A project with more than 100 fields would truncate.
 const FETCH_PROJECT_META_QUERY: &str = r#"
     query FetchProjectMeta($owner: String!, $number: Int!) {
         organization(login: $owner) {
@@ -479,7 +487,7 @@ const FETCH_PROJECT_META_QUERY: &str = r#"
 pub async fn fetch_project_meta(
     client: &GitHubClient,
     owner: &str,
-    number: u64,
+    number: u32,
 ) -> Result<ProjectMeta, GitHubError> {
     let response: FetchProjectMetaResponse = client
         .query(
@@ -524,6 +532,9 @@ pub async fn fetch_project_meta(
 /// PullRequest, DraftIssue), and an inline `subIssues(first: 50)`
 /// connection. Issues with more than 50 sub-issues are resolved by a
 /// follow-up query in [`resolve_sub_issue_overflow`].
+///
+/// Per-item `fieldValues` are capped at `first: 100` with no overflow
+/// handling — a project with more than 100 custom fields would truncate.
 const FETCH_PROJECT_ITEMS_QUERY: &str = r#"
     query FetchProjectItems($projectId: ID!, $first: Int!, $after: String) {
         node(id: $projectId) {
@@ -538,7 +549,7 @@ const FETCH_PROJECT_ITEMS_QUERY: &str = r#"
 
     fragment ProjectItemFields on ProjectV2Item {
         id
-        fieldValues(first: 30) {
+        fieldValues(first: 100) {
             nodes {
                 __typename
                 ... on ProjectV2ItemFieldTextValue {
