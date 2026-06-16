@@ -1,8 +1,5 @@
 //! Integration tests for `GitHubClient` against a mock GraphQL endpoint.
 //!
-//! Only imports the public API of `skill_tree` and the test infrastructure
-//! exposed by `skill_tree_testlib`. The wiremock plumbing lives in the
-//! testlib so individual tests stay focused on the scenario.
 
 use std::time::Duration;
 
@@ -122,6 +119,33 @@ async fn graphql_errors_are_returned_without_retry() {
         GitHubError::GraphQLError(msg) => assert!(msg.contains("oops")),
         other => panic!("expected GraphQLError, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn returns_data_when_present_despite_path_level_errors() {
+    // GitHub partial-success: valid `data` alongside a non-empty `errors`
+    // array (e.g. a NOT_FOUND on one field of a multi-probe query). `data`
+    // wins; the path-level errors are not fatal.
+    let gh = MockGitHub::start().await;
+    gh.ok_data_with_errors(
+        json!({ "hello": "world" }),
+        json!([{ "type": "NOT_FOUND", "path": ["other"], "message": "nope" }]),
+    )
+    .expect(1)
+    .mount(&gh.server)
+    .await;
+
+    let client = gh.client(Duration::from_secs(10));
+    let resp: Hello = client
+        .query("query Q { hello }", EmptyVars {})
+        .await
+        .unwrap();
+    assert_eq!(
+        resp,
+        Hello {
+            hello: "world".into()
+        }
+    );
 }
 
 #[tokio::test]

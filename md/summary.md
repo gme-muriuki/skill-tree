@@ -1,20 +1,24 @@
+<!--
+    STYLE GUIDELINES:
+
+    - Avoid promotional language: no "rich", "powerful", "easy", etc.
+    - No "Benefits" sections - they're promotional by nature
+    - No duplicate table of contents at chapter ends
+    - Be factual and technical, not persuasive
+    - Describe what the system does, not why it's good
+-->
+
 # Summary
 
 - [Introduction](./introduction.md)
 
-# User's guide
-
-- [Installing skill-tree](./guide/install.md)
-- [Configuration](./guide/configuration.md)
-- [Subcommands](./guide/subcommands.md)
-
 # Design
 
-- [Architecture](./design/architecture.md)
-- [GitHub as source of truth](./design/github-source-of-truth.md)
-- [Edge convention](./design/edge-convention.md)
+- [Configuration](./design/config.md)
+- [GitHub client](./design/github-client.md)
+- [Project fetching](./design/project-fetch.md)
 - [Node model](./design/node-model.md)
-- [Roadmap](./design/roadmap.md)
+- [Edge convention](./design/edge-convention.md)
 
 # Contribution guide
 
@@ -22,4 +26,3 @@
 - [Important flows](./contributing/important-flows.md)
 - [Running tests](./contributing/running-tests.md)
 - [Common issues](./contributing/common-issues.md)
-- [Governance](./contributing/governance.md)

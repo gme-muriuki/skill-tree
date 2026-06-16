@@ -13,7 +13,8 @@
 //! friendly `display-name` for CLI output.
 //! Fields not declared in `[[field]]` are still fetched and stored on each node.
 
-use crate::error::config::ConfigError;
+use crate::error::config::{ConfigError, ConfigIssue};
+use crate::github::projects::{FieldKind, ProjectMeta};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -42,7 +43,9 @@ pub struct GithubConfig {
     /// Project number from the GitHub Projects URL.
     ///
     /// For `github.com/orgs/rust-lang/projects/42` -> `42`.
-    pub project: u64,
+    ///
+    /// `u32` mirrors GitHub's 32-bit `Int` project number.
+    pub project: u32,
 }
 
 /// Declares one GitHub Project custom field that skill-tree should read.
@@ -147,6 +150,12 @@ impl SkillTree {
 
 impl Config {
     fn validate(&self) -> Fallible<()> {
+        // Color values with no field to read them from can never apply —
+        // treat the missing `github-name` as an error, not silent dead config.
+        if !self.colors.values.is_empty() && self.colors.github_name.is_empty() {
+            return Err(ConfigError::ColorsValuesWithoutField);
+        }
+
         for (key, value) in &self.colors.values {
             if !is_valid_hex_color(value) {
                 return Err(ConfigError::InvalidColor {
@@ -157,6 +166,68 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    /// Cross-check this config against the project metadata returned by
+    /// GitHub. Collects every mismatch — missing field names, wrong field
+    /// kinds, value names that aren't options of the SingleSelect — into a
+    /// single `Vec<ConfigIssue>` so the user fixes them in one editing
+    /// session.
+    pub fn validate_against(&self, meta: &ProjectMeta) -> Result<(), Vec<ConfigIssue>> {
+        let mut issues = Vec::new();
+
+        if !self.colors.github_name.is_empty() {
+            match meta.field_by_name(&self.colors.github_name) {
+                None => issues.push(ConfigIssue::FieldNotFound {
+                    section: "colors",
+                    name: self.colors.github_name.clone(),
+                }),
+                Some(field) => match &field.kind {
+                    FieldKind::SingleSelect { options } => {
+                        for value_name in self.colors.values.keys() {
+                            if !options.iter().any(|o| &o.name == value_name) {
+                                issues.push(ConfigIssue::OptionNotFound {
+                                    field: self.colors.github_name.clone(),
+                                    value: value_name.clone(),
+                                });
+                            }
+                        }
+                    }
+                    other => issues.push(ConfigIssue::FieldWrongType {
+                        section: "colors",
+                        name: self.colors.github_name.clone(),
+                        expected: "SingleSelect",
+                        actual: field_kind_name(other),
+                    }),
+                },
+            }
+        }
+
+        for field_config in &self.fields {
+            if meta.field_by_name(&field_config.github_name).is_none() {
+                issues.push(ConfigIssue::FieldNotFound {
+                    section: "field",
+                    name: field_config.github_name.clone(),
+                });
+            }
+        }
+
+        if issues.is_empty() {
+            Ok(())
+        } else {
+            Err(issues)
+        }
+    }
+}
+
+fn field_kind_name(kind: &FieldKind) -> &'static str {
+    match kind {
+        FieldKind::Text => "Text",
+        FieldKind::Number => "Number",
+        FieldKind::Date => "Date",
+        FieldKind::SingleSelect { .. } => "SingleSelect",
+        FieldKind::Iteration { .. } => "Iteration",
+        FieldKind::Unknown => "Unknown",
     }
 }
 
@@ -295,6 +366,24 @@ mod tests {
     }
 
     #[test]
+    fn validation_fails_when_colors_values_set_without_github_name() {
+        // `[colors.values]` populated but no `github-name` to read — the
+        // values can never apply, so this is rejected rather than ignored.
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"rust-lang\"
+            project = 42
+
+            [colors.values]
+            \"In Progress\" = \"#4a90d9\"
+        "});
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ColorsValuesWithoutField)
+        ));
+    }
+
+    #[test]
     fn from_dir_loads_config_file() {
         let tmp = tempdir().unwrap();
         fs::write(tmp.path().join(".skill-tree.toml"), valid_toml()).unwrap();
@@ -372,5 +461,159 @@ mod tests {
         assert!(!is_valid_hex_color("#gggggg"));
         assert!(!is_valid_hex_color(""));
         assert!(!is_valid_hex_color("#"));
+    }
+
+    // -- validate_against --
+
+    use crate::github::projects::{FieldOption, OwnerKind, ProjectField};
+
+    fn meta_with_status_field() -> ProjectMeta {
+        ProjectMeta {
+            id: "PVT_1".into(),
+            title: "Test".into(),
+            owner_kind: OwnerKind::Organization,
+            fields: vec![
+                ProjectField {
+                    id: "F_status".into(),
+                    name: "Status".into(),
+                    kind: FieldKind::SingleSelect {
+                        options: vec![
+                            FieldOption {
+                                id: "o1".into(),
+                                name: "Done".into(),
+                            },
+                            FieldOption {
+                                id: "o2".into(),
+                                name: "In Progress".into(),
+                            },
+                            FieldOption {
+                                id: "o3".into(),
+                                name: "Blocked".into(),
+                            },
+                        ],
+                    },
+                },
+                ProjectField {
+                    id: "F_priority".into(),
+                    name: "Priority".into(),
+                    kind: FieldKind::Number,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn validate_against_passes_on_minimal_config() {
+        let config = parse(minimal_toml());
+        assert!(config.validate_against(&meta_with_status_field()).is_ok());
+    }
+
+    #[test]
+    fn validate_against_passes_when_colors_field_and_values_match() {
+        let config = parse(valid_toml());
+        // valid_toml() declares Status as the colors field with values
+        // "In Progress", "Blocked", "Complete". meta has Done, In Progress,
+        // Blocked. So "Complete" mismatches.
+        let issues = config
+            .validate_against(&meta_with_status_field())
+            .unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(
+            &issues[0],
+            ConfigIssue::OptionNotFound { value, .. } if value == "Complete"
+        ));
+    }
+
+    #[test]
+    fn validate_against_collects_field_not_found() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [colors]
+            github-name = \"Statu\"
+        "});
+        let issues = config
+            .validate_against(&meta_with_status_field())
+            .unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(
+            &issues[0],
+            ConfigIssue::FieldNotFound { section, name }
+                if *section == "colors" && name == "Statu"
+        ));
+    }
+
+    #[test]
+    fn validate_against_collects_field_wrong_type() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [colors]
+            github-name = \"Priority\"
+        "});
+        let issues = config
+            .validate_against(&meta_with_status_field())
+            .unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(
+            &issues[0],
+            ConfigIssue::FieldWrongType { name, expected, actual, .. }
+                if name == "Priority" && *expected == "SingleSelect" && *actual == "Number"
+        ));
+    }
+
+    #[test]
+    fn validate_against_collects_multiple_issues_in_one_pass() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [[field]]
+            display-name = \"prio\"
+            github-name  = \"Priorityy\"
+
+            [colors]
+            github-name = \"Statu\"
+
+            [colors.values]
+            \"In Progress\" = \"#4a90d9\"
+        "});
+        let issues = config
+            .validate_against(&meta_with_status_field())
+            .unwrap_err();
+        // colors field "Statu" doesn't exist; field "Priorityy" doesn't exist
+        // (the colors.values entry is skipped because the field lookup
+        // already failed — it would otherwise be a third issue).
+        assert_eq!(issues.len(), 2);
+    }
+
+    #[test]
+    fn validate_against_flags_each_unknown_option_value() {
+        let config = parse(indoc! {"
+            [github]
+            owner   = \"o\"
+            project = 1
+
+            [colors]
+            github-name = \"Status\"
+
+            [colors.values]
+            \"Done\"      = \"#57a85a\"
+            \"Don done\"  = \"#e05252\"
+            \"On Track\"  = \"#4a90d9\"
+        "});
+        let issues = config
+            .validate_against(&meta_with_status_field())
+            .unwrap_err();
+        // "Done" is fine. "Don done" and "On Track" are not options.
+        assert_eq!(issues.len(), 2);
+        for issue in &issues {
+            assert!(matches!(issue, ConfigIssue::OptionNotFound { .. }));
+        }
     }
 }

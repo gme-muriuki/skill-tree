@@ -78,6 +78,17 @@ impl MockGitHub {
             })))
     }
 
+    /// 200 response carrying BOTH `data` and a non-empty `errors` array —
+    /// GitHub's partial-success shape. The metadata query relies on this: the
+    /// org/user probe returns data for the matching namespace and a
+    /// path-level `NOT_FOUND` error for the other.
+    pub fn ok_data_with_errors(&self, body: Value, errors: Value) -> MockHandle {
+        self.matcher().respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "data": body, "errors": errors })),
+        )
+    }
+
     /// 200 response with neither `data` nor `errors` — exercises
     /// `GitHubError::InvalidResponse`.
     pub fn empty_envelope(&self) -> MockHandle {
